@@ -55,6 +55,10 @@ vi project-configs/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 # 3. Claude Code を起動
 ./agent.sh myapp claude
 
+# 全コマンドを自動承認（Dangerous モード）
+./agent.sh myapp cc
+# ./agent.sh myapp claude --dangerously-skip-permissions と同等。
+
 # シェルに入りたいとき
 ./agent.sh myapp shell
 
@@ -66,6 +70,20 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 # 後始末
 ./agent.sh myapp down
 ```
+
+## Claude Code のパーミッション設定
+
+`entrypoint.sh` が起動時に `~/.claude/settings.json` へ以下を書き込む。
+
+| 区分 | 対象 | 動作 |
+|------|------|------|
+| `allow` | `Read` / `Edit` / `Write` | 自動承認（プロンプトなし） |
+| `deny` | `git push --force` / `git push -f` / `git reset --hard` | 常にブロック |
+
+> `deny` パターンはコマンド先頭からの前方一致。`git push origin --force`（`--force` が後置）など
+> 引数順が異なるパターンは拾えない点に注意。
+
+制限なしで動かしたい場合は `./agent.sh <project> cc`（上記「使い方」参照）。
 
 ## ネットワーク遮断の挙動
 

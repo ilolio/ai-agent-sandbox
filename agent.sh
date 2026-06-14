@@ -28,7 +28,8 @@ COMPOSE=(docker compose --env-file "$ENV_FILE" -p "$PROJECT")
 case "$ACTION" in
   up)     "${COMPOSE[@]}" up -d --build ;;
   shell)  "${COMPOSE[@]}" exec agent bash ;;
-  claude) "${COMPOSE[@]}" exec agent claude --model "${CLAUDE_MODEL:-local-model}" ;;
+  claude) "${COMPOSE[@]}" exec agent claude --model "${CLAUDE_MODEL:-local-model}" "${@:3}" ;;
+  cc)     "${COMPOSE[@]}" exec agent claude --model "${CLAUDE_MODEL:-local-model}" --dangerously-skip-permissions "${@:3}" ;;
   down)   "${COMPOSE[@]}" down ;;
   logs)   "${COMPOSE[@]}" logs -f ;;
   *)      echo "unknown action: $ACTION"; exit 1 ;;

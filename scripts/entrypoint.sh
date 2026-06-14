@@ -35,6 +35,14 @@ jq --arg base "$ANTHROPIC_BASE_URL" --arg token "$ANTHROPIC_AUTH_TOKEN" '
     CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
     DISABLE_TELEMETRY: "1",
     DISABLE_ERROR_REPORTING: "1"
+  } |
+  .permissions = {
+    "allow": ["Read", "Edit", "Write"],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)"
+    ]
   }' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
 echo "[entrypoint] synced settings.json (ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL})"
 
