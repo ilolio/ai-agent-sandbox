@@ -1,0 +1,18 @@
+# プロジェクト個別設定（WORKSPACE パスや egress 設定を含むのでコミットしない）
+# env.example はテンプレートなので追跡する
+projects/*.env
+
+# ローカル開発用のファイル
+*.local
+
+# 一般的な秘密情報
+.env
+.env.*
+!env.example
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

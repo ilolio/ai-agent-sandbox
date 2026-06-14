@@ -1,0 +1,52 @@
+# プロジェクトごとに別コンテナとして起動する。
+# 使い方:
+#   PROJECT=myapp WORKSPACE=/path/to/myapp docker compose -p myapp up -d
+#   docker compose -p myapp exec agent claude
+#
+# -p (project name) を変えれば同じ compose で複数プロジェクトが並走する。
+# それぞれ独立したコンテナ・ネットワーク・ワークスペースになる。
+
+services:
+  agent:
+    build:
+      context: .
+      # ★言語(flavor)の選択。projects/<project>.env の FLAVOR で切り替わる。
+      target: ${FLAVOR:-node}
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    # flavor ごとに別イメージにする（同タグだと flavor が互いに上書きしてしまう）
+    image: ai-agent-sandbox:${FLAVOR:-node}
+    container_name: ${PROJECT:-default}-agent
+
+    # iptables を張るために必要な最小権限
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    # ★ファイルのやり取りはこの 1 フォルダだけ。
+    #   host の WORKSPACE を /workspace に bind mount する。
+    volumes:
+      - ${WORKSPACE:?set WORKSPACE to the project folder}:/workspace:rw
+      # Claude Code の設定/履歴はプロジェクト別に永続化（host を汚さない）
+      - claude-config:/home/node/.claude
+
+    environment:
+      LLAMA_HOST: ${LLAMA_HOST:-host.docker.internal}
+      LLAMA_PORT: ${LLAMA_PORT:-8080}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-local-model}
+      # ★コンテナ（プロジェクト）ごとに違うホワイトリスト
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
+      ENABLE_FIREWALL: ${ENABLE_FIREWALL:-1}
+
+    # Linux で host.docker.internal を使えるようにする
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  claude-config:
