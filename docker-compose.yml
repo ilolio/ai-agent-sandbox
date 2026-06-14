@@ -10,7 +10,7 @@ services:
   agent:
     build:
       context: .
-      # ★言語(flavor)の選択。projects/<project>.env の FLAVOR で切り替わる。
+      # ★言語(flavor)の選択。project-configs/<project>.env の FLAVOR で切り替わる。
       target: ${FLAVOR:-node}
       args:
         UID: ${HOST_UID:-1000}

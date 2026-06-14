@@ -27,7 +27,7 @@ Docker コンテナに Claude Code (llama.cpp バックエンド) を閉じ込�
 ## 言語(flavor)の選択
 
 `Dockerfile` は共通土台 `base`（Claude Code + egress 制御）を各言語ステージが継承する
-マルチステージ構成。`projects/<project>.env` の `FLAVOR` で使うステージを選ぶ。
+マルチステージ構成。`project-configs/<project>.env` の `FLAVOR` で使うステージを選ぶ。
 
 | FLAVOR | 中身 |
 |--------|------|
@@ -46,8 +46,8 @@ Docker コンテナに Claude Code (llama.cpp バックエンド) を閉じ込�
 
 ```bash
 # 1. プロジェクト設定を作る
-cp env.example projects/myapp.env
-vi projects/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
+cp env.example project-configs/myapp.env
+vi project-configs/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 
 # 2. 起動（初回はビルド）
 ./agent.sh myapp up
@@ -59,7 +59,7 @@ vi projects/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 ./agent.sh myapp shell
 
 # 別プロジェクトは同時並走できる
-cp env.example projects/other.env && vi projects/other.env
+cp env.example project-configs/other.env && vi project-configs/other.env
 ./agent.sh other up
 ./agent.sh other claude
 
@@ -101,7 +101,7 @@ socat TCP-LISTEN:33030,fork,reuseaddr TCP:localhost:8080
 ```
 
 ```ini
-# projects/<project>.env は中継ポートを指す
+# project-configs/<project>.env は中継ポートを指す
 LLAMA_HOST=host.docker.internal
 LLAMA_PORT=33030
 ```

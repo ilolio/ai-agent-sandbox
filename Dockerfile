@@ -2,7 +2,7 @@
 #
 # マルチステージ構成。プロジェクトの言語に応じて build target(=flavor) を選ぶ。
 #
-#   選び方: projects/<project>.env に FLAVOR を書く
+#   選び方: project-configs/<project>.env に FLAVOR を書く
 #       FLAVOR=node     … Node.js プロジェクト（既定）
 #       FLAVOR=python   … Python + uv
 #       FLAVOR=go       … Go
