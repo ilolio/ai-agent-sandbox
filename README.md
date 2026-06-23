@@ -6,13 +6,25 @@ Docker コンテナに Claude Code (llama.cpp バックエンド) を閉じ込�
 
 ## 前提
 
-- host 側で llama-server が起動していること（Anthropic Messages API 対応版 = 2026/01 以降）
-  ```
-  llama-server -hf unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --ctx-size 32768
-  ```
-  - Claude Code は最低 32K context 必要。8K/16K では実用にならない。
-  - `--host 0.0.0.0` にしないとコンテナから届かない。
 - Docker / Docker Compose v2
+- llama-server の用意のしかたは 2 通り。どちらでもよい。
+
+### モードA: ホスト版（既定）
+
+host 側で自分で llama-server を起動しておき、コンテナはそこへ繋ぐ。
+
+```
+llama-server -hf unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --ctx-size 32768
+```
+- Anthropic Messages API 対応版（= 2026/01 以降）が必要。
+- Claude Code は最低 32K context 必要。8K/16K では実用にならない。
+- `--host 0.0.0.0` にしないとコンテナから届かない。
+
+### モードB: 同梱（バンドル）版
+
+llama-server を agent と一緒に compose で起動する。host 側の準備は不要。
+`project-configs/<project>.env` に `BUNDLED=1` を書くだけ（詳細は後述）。
+GPU を使う場合は NVIDIA Container Toolkit が必要。
 
 ## 構成
 
@@ -41,6 +53,50 @@ Docker コンテナに Claude Code (llama.cpp バックエンド) を閉じ込�
 > パッケージ取得は実行時に egress 制御を受ける。`env.example` の `ALLOWED_DOMAINS` は
 > npm / pip・uv / go mod / github の汎用ドメインをひと通り含むので、たいていの flavor は
 > そのまま動く。より厳しく絞りたいときは不要な行を削る。
+
+## 同梱（バンドル）版 llama-server
+
+host 側で llama-server を立てる代わりに、公式 llama.cpp イメージを compose の
+サイドカーとして agent と一緒に起動する構成。`project-configs/<project>.env` に
+`BUNDLED=1` を書くと、`agent.sh` が `docker-compose.llama.yml` を重ねて
+`llama` サービスを起動し、agent をそこへ向ける。
+
+```ini
+# project-configs/myapp.env（同梱版）
+BUNDLED=1
+# 任意で上書き（未指定なら下が既定値）
+# LLAMA_MODEL=unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M
+# LLAMA_CTX=32768
+# LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+```
+
+```bash
+./agent.sh myapp up        # agent と llama を両方起動（初回はモデルを取得）
+./agent.sh myapp logs      # モデルのロード進捗はここで確認
+./agent.sh myapp claude
+```
+
+| 項目 | 挙動 |
+|------|------|
+| 接続先 | overlay が `LLAMA_HOST=llama`(compose サービス名) に向ける。env の `LLAMA_HOST/PORT` は無視される |
+| モデル取得 | `llama` サービスが `-hf` で取得。`llama-models` volume にキャッシュし再起動で再DLしない |
+| egress 制御 | agent の firewall は `llama` を解決して自動許可。モデルの DL は firewall の無い `llama` 側で行われるので、agent は閉じたまま |
+| 後始末 | `./agent.sh myapp down` で llama も一緒に停止（モデル volume は残る） |
+
+### GPU(NVIDIA) で動かす
+
+NVIDIA ドライバ + NVIDIA Container Toolkit が入った host で、env に以下を足す。
+`agent.sh` が `docker-compose.llama-gpu.yml` も重ね、cuda イメージ＋GPU 割当に切り替わる。
+
+```ini
+BUNDLED=1
+LLAMA_GPU=1
+LLAMA_NGL=99                                          # GPU offload 層数
+# LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda13 # CUDA13 等を使う場合のみ
+```
+
+> モデルや context 以外の細かい llama-server フラグを足したいときは
+> `docker-compose.llama.yml` の `command:` を直接編集する。
 
 ## 使い方
 
@@ -130,5 +186,6 @@ socat は手動起動だと WSL 再起動で消えるので、常用するなら
 
 ## ライセンス
 - Claude Code: Anthropic 公式 CLI（商用ポリシーは Anthropic の利用規約に従う）
-- llama.cpp: MIT
+- llama.cpp: MIT（同梱版で使う公式イメージ `ghcr.io/ggml-org/llama.cpp` も同じく MIT）
+  - 取得するモデル（例: Qwen3-Coder）のライセンスは各モデル配布元の規約に従う
 - ベースイメージ node:bookworm / 同梱ツール(iptables, ipset, jq, ripgrep 等): いずれも商用利用可（GPL系を含むがリンクではなく実行バイナリ利用のため通常問題なし）

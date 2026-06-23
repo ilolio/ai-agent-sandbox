@@ -1,0 +1,25 @@
+# GPU(NVIDIA) で同梱 llama-server を動かすためのオーバーレイ。
+# docker-compose.yml + docker-compose.llama.yml の上にさらに重ねる。
+#
+# 有効化: project-configs/<project>.env に BUNDLED=1 と LLAMA_GPU=1 を書く
+#         （agent.sh が自動で重ねる）。
+#
+# 前提:
+#   - host に NVIDIA ドライバ + NVIDIA Container Toolkit が入っていること
+#   - GPU offload 層数を env で指定すること（CPU 既定の 0 のままだと GPU を使わない）:
+#       LLAMA_NGL=99
+#   - イメージは未指定なら下で cuda 版が既定になる。CUDA 13 や別アクセラレータを
+#     使う場合のみ env で上書きする:
+#       LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda13
+services:
+  llama:
+    # CUDA イメージ未指定なら cuda 版を既定にする（このオーバーレイが後勝ち）。
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # 使う GPU 数。既定は all。特定枚数なら LLAMA_GPU_COUNT=1 等。
+              count: ${LLAMA_GPU_COUNT:-all}
+              capabilities: [gpu]

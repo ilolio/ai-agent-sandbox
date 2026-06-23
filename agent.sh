@@ -19,11 +19,23 @@ ACTION="${2:?usage: ./agent.sh <project> <up|shell|claude|down|logs>}"
 ENV_FILE="project-configs/${PROJECT}.env"
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (cp env.example project-configs/$PROJECT.env)"; exit 1; }
 
+# プロジェクト設定をこのスクリプト側でも読む（BUNDLED / LLAMA_GPU / CLAUDE_MODEL 判定用）。
+# docker compose は別途 --env-file で同じファイルを読むので二重でも問題ない。
+set -a; . "$ENV_FILE"; set +a
+
 # uid/gid は実行ユーザに合わせる（UID は bash の readonly 変数なので別名を使う）
 export HOST_UID HOST_GID
 HOST_UID="$(id -u)"; HOST_GID="$(id -g)"
 
-COMPOSE=(docker compose --env-file "$ENV_FILE" -p "$PROJECT")
+# llama-server 同梱モード: BUNDLED=1 なら overlay を重ねて llama サービスも一緒に起動する。
+# さらに LLAMA_GPU=1 なら GPU 用 overlay も重ねる。
+COMPOSE_FILES=(-f docker-compose.yml)
+if [ "${BUNDLED:-0}" = "1" ]; then
+    COMPOSE_FILES+=(-f docker-compose.llama.yml)
+    [ "${LLAMA_GPU:-0}" = "1" ] && COMPOSE_FILES+=(-f docker-compose.llama-gpu.yml)
+fi
+
+COMPOSE=(docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" -p "$PROJECT")
 
 case "$ACTION" in
   up)     "${COMPOSE[@]}" up -d --build ;;

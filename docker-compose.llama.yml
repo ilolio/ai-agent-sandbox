@@ -1,0 +1,56 @@
+# llama-server 同梱（バンドル）版のオーバーレイ。
+#
+# 既定の docker-compose.yml に重ねて使う。agent と同じ compose ネットワーク上に
+# 公式 llama.cpp イメージで llama-server を起動し、agent をホストではなく
+# その llama サービスへ向ける。→ host 側で llama-server を立てる必要がなくなる。
+#
+# 有効化: project-configs/<project>.env に BUNDLED=1 を書く（agent.sh が自動で重ねる）。
+#         GPU を使う場合はさらに LLAMA_GPU=1（docker-compose.llama-gpu.yml も重なる）。
+#
+# 素の docker compose で使うなら:
+#   docker compose -f docker-compose.yml -f docker-compose.llama.yml -p <proj> up -d
+
+services:
+  # ---- 同梱 llama-server ----
+  #   公式イメージ。entrypoint が llama-server なので command にそのまま引数を渡す。
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    container_name: ${PROJECT:-default}-llama
+    # -hf でのモデル取得先。named volume に逃がして再起動時の再ダウンロードを防ぐ。
+    environment:
+      LLAMA_CACHE: /models
+    command:
+      - "-hf"
+      - "${LLAMA_MODEL:-unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      # Claude Code は最低 32K context 必要。
+      - "--ctx-size"
+      - "${LLAMA_CTX:-32768}"
+      # GPU offload 層数。CPU 既定は 0。GPU 版は env で LLAMA_NGL=99 等にする。
+      - "-ngl"
+      - "${LLAMA_NGL:-0}"
+      # ツール呼び出し（Claude Code は tool 駆動）に必要な chat template を有効化。
+      - "--jinja"
+    volumes:
+      - llama-models:/models
+    # host へはポート公開しない（agent からは compose ネットワーク経由で届く）。
+    # host から直接叩いてデバッグしたいときだけ下を有効化する:
+    # ports:
+    #   - "${LLAMA_PUBLISH_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  # ---- agent を同梱 llama に向ける ----
+  agent:
+    depends_on:
+      - llama
+    environment:
+      # compose のサービス名で解決。init-firewall.sh もこの名前を解決して許可する。
+      LLAMA_HOST: llama
+      LLAMA_PORT: "8080"
+
+volumes:
+  # モデルキャッシュ。プロジェクト(-p)ごとに別ボリュームになる。
+  llama-models:
