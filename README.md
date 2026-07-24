@@ -23,6 +23,7 @@ Docker コンテナに Claude Code (llama.cpp バックエンド) を閉じ込�
 | Claude Code を llama.cpp で | entrypoint が `ANTHROPIC_BASE_URL` を host の llama-server に向け、`~/.claude/settings.json` を初期生成 |
 | egress をコンテナごとに制御 | 起動時 `init-firewall.sh` が iptables でホワイトリスト以外を drop |
 | 言語ごとにイメージを選択 | `Dockerfile` をマルチステージ化し、`FLAVOR` で build target を切替 |
+| 後から入れたツールを残す | `~/.local` を名前付きボリューム化し、`PATH` に image の `ENV` として追加 |
 
 ## 言語(flavor)の選択
 
@@ -70,6 +71,43 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 # 後始末
 ./agent.sh myapp down
 ```
+
+## 何が永続して、何が消えるか
+
+コンテナの書き込みレイヤは `stop`/`start` では残るが、**コンテナが作り直されると消える**
+（`./agent.sh <p> down`、および `up` は `--build` 付きなのでイメージや compose 設定が
+変わると再作成される）。永続するのは以下の3つだけ。
+
+| パス | 実体 | 用途 |
+|------|------|------|
+| `/workspace` | host の `WORKSPACE` を bind mount | プロジェクトのソース。`.venv` / `node_modules` などもここに置けば確実に残る |
+| `/home/node/.claude` | 名前付きボリューム `claude-config` | Claude Code の設定・履歴 |
+| `/home/node/.local` | 名前付きボリューム `local-tools` | 実行時に入れたツール（`~/.local/bin` は `PATH` に入っている） |
+
+これ以外（`/usr/local/bin`、`~/.bashrc`、`/tmp` など）に入れたものは再作成で消える。
+
+### 実行時にツールを入れる
+
+`~/.local` 配下に入れば、コンテナを作り直しても残り、`PATH` も通ったままになる。
+主要なツールはそこへ向くよう Dockerfile 側で設定済み。
+
+| 入れ方 | 行き先 | 備考 |
+|--------|--------|------|
+| `pip install --user <pkg>` | `~/.local/bin` | 既定でここ |
+| `uv tool install <pkg>` | `~/.local/bin` | 既定でここ |
+| `npm i -g <pkg>` | `~/.local/bin` | `NPM_CONFIG_PREFIX=/home/node/.local`。sudo 不要 |
+| `go install <pkg>@latest` | `~/.local/bin` | `GOBIN` で明示（`$GOPATH/bin` は消えるため） |
+| 単体バイナリを手で置く | `mv ./tool ~/.local/bin/` | |
+
+> `PATH` はイメージの `ENV` で設定している。`docker compose exec` は entrypoint も
+> `~/.profile` も通らないため、シェル内で `export PATH=...` しても**そのシェル限り**で消える。
+> 恒久的に足したいパスは Dockerfile の `ENV PATH` か compose の `environment:` に書く。
+
+**恒久的に必要なツールは Dockerfile の flavor ステージに書く**のが本筋（再現性がある）。
+`~/.local` は「ad-hoc に入れたものが毎回消えるのを防ぐ」ための保険。
+
+`cargo install`（`~/.cargo/bin`）など上表にないツールチェーンを使う場合は、
+インストール先を `~/.local` 配下に向けるか、compose に別ボリュームを足す。
 
 ## Claude Code のパーミッション設定
 

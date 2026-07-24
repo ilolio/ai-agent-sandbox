@@ -30,6 +30,9 @@ services:
       - ${WORKSPACE:?set WORKSPACE to the project folder}:/workspace:rw
       # Claude Code の設定/履歴はプロジェクト別に永続化（host を汚さない）
       - claude-config:/home/node/.claude
+      # 実行時に入れたツール（pip --user, uv tool, npm i -g, go install 等）の置き場。
+      # ここに無いものはコンテナ再作成で消える。
+      - local-tools:/home/node/.local
 
     environment:
       LLAMA_HOST: ${LLAMA_HOST:-host.docker.internal}
@@ -50,3 +53,4 @@ services:
 
 volumes:
   claude-config:
+  local-tools:

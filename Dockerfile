@@ -47,6 +47,18 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
 # ボリュームへコピーするため、node ユーザが書き込めるようになる。
 RUN mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
 
+# --- 実行時に入れたツールの置き場（永続ボリューム）---
+# コンテナの書き込みレイヤは `up --build` での再作成で消えるので、
+# 後から入れたツールは ~/.local(名前付きボリューム) に集約して残す。
+# PATH は image の ENV として持たせる。`docker compose exec` は entrypoint も
+# ~/.profile も通らないため、ENV で入れておかないと exec したシェルに効かない。
+RUN mkdir -p /home/node/.local/bin /home/node/.local/lib \
+    && chown -R node:node /home/node/.local
+ENV PATH="/home/node/.local/bin:${PATH}"
+# npm i -g を root 権限不要な ~/.local/bin に向ける（Claude Code 本体は
+# 上の RUN で既に /usr/local へ入っているので影響しない）
+ENV NPM_CONFIG_PREFIX=/home/node/.local
+
 # 作業フォルダ。host の特定フォルダだけここに mount する
 WORKDIR /workspace
 USER node
@@ -86,4 +98,6 @@ RUN curl -LsSf "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go
     && rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH=/home/node/go
+# go install の出力先も永続ボリューム側へ（GOPATH/bin は再作成で消えるため）
+ENV GOBIN=/home/node/.local/bin
 USER node
