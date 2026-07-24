@@ -19,6 +19,13 @@ ACTION="${2:?usage: ./agent.sh <project> <up|shell|claude|down|logs>}"
 ENV_FILE="project-configs/${PROJECT}.env"
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (cp env.example project-configs/$PROJECT.env)"; exit 1; }
 
+# env ファイルはホスト側シェルにも読み込む（--env-file は compose 側にしか効かず、
+# 下の ${CLAUDE_MODEL} などはこのシェルで展開されるため）。
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
 # uid/gid は実行ユーザに合わせる（UID は bash の readonly 変数なので別名を使う）
 export HOST_UID HOST_GID
 HOST_UID="$(id -u)"; HOST_GID="$(id -g)"
