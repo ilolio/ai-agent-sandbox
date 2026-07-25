@@ -59,10 +59,14 @@ OPENCODE_MODEL="${OPENCODE_MODEL:-${CLAUDE_MODEL:-local-model}}"
 OPENCODE_CTX="${OPENCODE_CTX:-32768}"
 OPENCODE_OUT="${OPENCODE_OUT:-8192}"
 
-# 設定ファイルは毎起動で作り直す（~/.config は永続ボリュームではないので差分保持の
-# 意味が薄い）。プロジェクト固有の上書きは /workspace/opencode.json に置けば
-# OpenCode 側がマージしてくれる。
+# opencode.json は毎起動で env から作り直す（settings.json を同期するのと同じ理由で、
+# LLAMA_HOST/PORT や OPENCODE_MODEL を変えたときに古い値が残らないようにする）。
+# ディレクトリ自体は永続ボリュームだが、消さないのは opencode.json 以外
+# ——実行時に npm から落ちるプロバイダ SDK(node_modules)——だけ。
+# プロジェクト固有の上書きは /workspace/opencode.json に置けば OpenCode がマージする。
 mkdir -p "$HOME/.config/opencode"
+OPENCODE_CONF="$HOME/.config/opencode/opencode.json"
+tmp="$(mktemp)"
 jq -n \
   --arg base  "http://${LLAMA_HOST}:${LLAMA_PORT}/v1" \
   --arg model "$OPENCODE_MODEL" \
@@ -99,7 +103,7 @@ jq -n \
       "git reset --hard*": "deny"
     }
   }
-}' > "$HOME/.config/opencode/opencode.json"
+}' > "$tmp" && mv "$tmp" "$OPENCODE_CONF"
 echo "[entrypoint] wrote opencode.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
 
 echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL:-local-model})"
