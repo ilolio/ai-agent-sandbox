@@ -12,8 +12,13 @@
 
 # ============================================================
 # base: 全 flavor 共通の土台
-#   - Claude Code(要 Node) + egress 制御に使うツール + 非 root ユーザ + firewall
+#   - エージェント CLI(要 Node) + egress 制御に使うツール + 非 root ユーザ + firewall
 #   - 各言語ステージはこの base を継承して言語ツールだけ足す
+#
+#   エージェントは Claude Code / OpenCode の両方を常に入れておき、
+#   どちらを起動するかは実行時(agent.sh のアクション or env の AGENT)に選ぶ。
+#   ビルド時に切り替えないのは、同じ flavor のイメージタグを共有したいため
+#   （切り替えるたびに再ビルドが走るのを避ける）。
 # ============================================================
 FROM node:22-bookworm-slim AS base
 
@@ -24,8 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo procps less \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Claude Code (Anthropic 公式 CLI) ---
-RUN npm install -g @anthropic-ai/claude-code \
+# --- エージェント CLI（両方入れる。起動時にどちらを使うか選ぶ）---
+#   @anthropic-ai/claude-code : Anthropic 公式 CLI
+#   opencode-ai               : OpenCode (MIT)。platform 別バイナリを optionalDeps で取る
+RUN npm install -g @anthropic-ai/claude-code opencode-ai \
     && npm cache clean --force
 
 # --- 非 root ユーザ。host の uid/gid に合わせて build 時に上書き可 ---
@@ -47,12 +54,16 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
 # ボリュームへコピーするため、node ユーザが書き込めるようになる。
 RUN mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
 
+# OpenCode の設定ディレクトリ。中身は entrypoint が毎起動で生成する。
+# セッション/認証などのデータは ~/.local/share/opencode（下の永続ボリューム側）に入る。
+RUN mkdir -p /home/node/.config/opencode && chown -R node:node /home/node/.config
+
 # --- 実行時に入れたツールの置き場（永続ボリューム）---
 # コンテナの書き込みレイヤは `up --build` での再作成で消えるので、
 # 後から入れたツールは ~/.local(名前付きボリューム) に集約して残す。
 # PATH は image の ENV として持たせる。`docker compose exec` は entrypoint も
 # ~/.profile も通らないため、ENV で入れておかないと exec したシェルに効かない。
-RUN mkdir -p /home/node/.local/bin /home/node/.local/lib \
+RUN mkdir -p /home/node/.local/bin /home/node/.local/lib /home/node/.local/share \
     && chown -R node:node /home/node/.local
 ENV PATH="/home/node/.local/bin:${PATH}"
 # npm i -g を root 権限不要な ~/.local/bin に向ける（Claude Code 本体は

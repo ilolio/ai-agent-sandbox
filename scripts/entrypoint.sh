@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
 # 1) egress ファイアウォールを張る
-# 2) Claude Code を llama.cpp(ホスト) に向ける環境を初期実行で整える
+# 2) Claude Code / OpenCode を llama.cpp(ホスト) に向ける設定を毎起動で整える
 # 3) 渡されたコマンド（既定: bash）を実行
+#
+# どちらのエージェントを使うかは実行時に選ぶ（agent.sh のアクション、既定は env の AGENT）。
+# 両方の設定を毎回書いておくので、片方しか使わなくても害はない。
 #
 set -euo pipefail
 
@@ -11,7 +14,7 @@ if [ "${ENABLE_FIREWALL:-1}" = "1" ]; then
     sudo /usr/local/bin/init-firewall.sh || echo "[entrypoint] firewall init failed (continuing)"
 fi
 
-# --- 2) Claude Code を llama.cpp に向ける ---
+# --- 2) Claude Code を llama.cpp に向ける（Anthropic 互換エンドポイント）---
 LLAMA_HOST="${LLAMA_HOST:-host.docker.internal}"
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 export ANTHROPIC_BASE_URL="http://${LLAMA_HOST}:${LLAMA_PORT}"
@@ -46,7 +49,62 @@ jq --arg base "$ANTHROPIC_BASE_URL" --arg token "$ANTHROPIC_AUTH_TOKEN" '
   }' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
 echo "[entrypoint] synced settings.json (ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL})"
 
+# --- 3) OpenCode を llama.cpp に向ける（OpenAI 互換エンドポイント = /v1）---
+# OpenCode は Anthropic 互換ではなく OpenAI 互換で喋るので、同じ llama-server の
+# /v1 を @ai-sdk/openai-compatible プロバイダとして登録する。
+# プロバイダ id は llamacpp 固定 → モデル指定は "llamacpp/<model>" になる。
+# （id を "llama" にすると models.dev の同名プロバイダ(Meta Llama API)とマージされ、
+#   使えないモデルが候補に混ざるので避ける）
+OPENCODE_MODEL="${OPENCODE_MODEL:-${CLAUDE_MODEL:-local-model}}"
+OPENCODE_CTX="${OPENCODE_CTX:-32768}"
+OPENCODE_OUT="${OPENCODE_OUT:-8192}"
+
+# 設定ファイルは毎起動で作り直す（~/.config は永続ボリュームではないので差分保持の
+# 意味が薄い）。プロジェクト固有の上書きは /workspace/opencode.json に置けば
+# OpenCode 側がマージしてくれる。
+mkdir -p "$HOME/.config/opencode"
+jq -n \
+  --arg base  "http://${LLAMA_HOST}:${LLAMA_PORT}/v1" \
+  --arg model "$OPENCODE_MODEL" \
+  --argjson ctx "$OPENCODE_CTX" \
+  --argjson out "$OPENCODE_OUT" '
+{
+  "$schema": "https://opencode.ai/config.json",
+  autoupdate: false,
+  provider: {
+    llamacpp: {
+      npm: "@ai-sdk/openai-compatible",
+      name: "llama-server (local)",
+      options: {
+        baseURL: $base,
+        # ローカルサーバなのでダミーで良い（未設定だと SDK が認証を求めることがある）
+        apiKey: "llamacpp-local"
+      },
+      models: {
+        ($model): { name: $model, limit: { context: $ctx, output: $out } }
+      }
+    }
+  },
+  model: ("llamacpp/" + $model),
+  # Claude Code 側(settings.json)と同じ方針に揃える。
+  # bash は「最後にマッチしたルールが勝つ」ので deny を後ろに置く。
+  permission: {
+    "*": "ask",
+    read: "allow",
+    edit: "allow",
+    bash: {
+      "*": "ask",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git reset --hard*": "deny"
+    }
+  }
+}' > "$HOME/.config/opencode/opencode.json"
+echo "[entrypoint] wrote opencode.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
+
 echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL:-local-model})"
+echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL})"
+echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
 
 exec "$@"
