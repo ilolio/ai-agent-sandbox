@@ -60,6 +60,16 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+    # entrypoint が firewall と設定生成を終えると /tmp/.sandbox-ready を作る。
+    # agent.sh はこれが healthy になるまで exec を待つ（起動直後に
+    # firewall 未設定のままエージェントを走らせないため）。
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/.sandbox-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
     working_dir: /workspace
     stdin_open: true
     tty: true

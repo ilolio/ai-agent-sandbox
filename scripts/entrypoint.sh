@@ -9,6 +9,11 @@
 #
 set -euo pipefail
 
+# 準備完了マーカー。compose の healthcheck がこれを見る（agent.sh は healthy に
+# なるまで exec を待つ）。コンテナ再起動時に前回の分が残らないよう最初に消す。
+READY_FLAG=/tmp/.sandbox-ready
+rm -f "$READY_FLAG"
+
 # --- 1) firewall（root 権限が要るので sudo 経由）---
 if [ "${ENABLE_FIREWALL:-1}" = "1" ]; then
     sudo /usr/local/bin/init-firewall.sh || echo "[entrypoint] firewall init failed (continuing)"
@@ -110,5 +115,7 @@ echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL:
 echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL})"
 echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
+
+: > "$READY_FLAG"
 
 exec "$@"

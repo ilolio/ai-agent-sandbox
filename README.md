@@ -98,10 +98,7 @@ OpenCode はグローバル設定とプロジェクト設定をマージし、�
 cp env.example project-configs/myapp.env
 vi project-configs/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 
-# 2. 起動（初回はビルド）
-./agent.sh myapp up
-
-# 3. エージェントを起動
+# 2. エージェントを起動（コンテナが落ちていれば自動で up される）
 ./agent.sh myapp run          # env の AGENT に従う（既定: claude）
 ./agent.sh myapp claude       # Claude Code を明示
 ./agent.sh myapp opencode     # OpenCode を明示
@@ -119,12 +116,26 @@ vi project-configs/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 
 # 別プロジェクトは同時並走できる
 cp env.example project-configs/other.env && vi project-configs/other.env
-./agent.sh other up
 ./agent.sh other run
+
+# env や Dockerfile を変えて作り直したいとき（明示的な再ビルド・再作成）
+./agent.sh myapp up
 
 # 後始末
 ./agent.sh myapp down
 ```
+
+### 自動 up について
+
+`up` 以外のアクション（`shell` / `run` / `yolo` / `claude` / `cc` / `opencode` / `oc`）は、
+コンテナが起動していなければ自動で `up -d --build --wait` してから実行する。
+ビルドはキャッシュが効くので、停止状態からでも数秒で立ち上がる。
+
+- entrypoint（firewall 設定と各 CLI の設定生成）が終わるまで待ってから `exec` する。
+  判定は compose の healthcheck で、entrypoint が最後に置く `/tmp/.sandbox-ready` を見ている。
+- **既に起動しているときは up し直さない。** env を書き換えた直後だと compose が
+  コンテナを作り直してしまい、別ターミナルで動いているセッションを巻き込むため。
+  env や Dockerfile の変更を反映したいときは明示的に `./agent.sh <project> up` する。
 
 ## 何が永続して、何が消えるか
 

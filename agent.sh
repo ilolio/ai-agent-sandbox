@@ -2,7 +2,7 @@
 #
 # プロジェクト単位で sandbox を操作するラッパー。
 #
-#   ./agent.sh <project> up          # ビルド & 起動
+#   ./agent.sh <project> up          # ビルドし直して起動（明示的な再ビルド用）
 #   ./agent.sh <project> shell       # コンテナに入る
 #   ./agent.sh <project> run         # 既定エージェント(env の AGENT)を起動
 #   ./agent.sh <project> yolo        # 同上・全承認スキップ
@@ -12,6 +12,9 @@
 #   ./agent.sh <project> oc          # OpenCode・全承認スキップ
 #   ./agent.sh <project> down        # 停止・削除
 #   ./agent.sh <project> logs        # ログ
+#
+# up 以外のアクションは、コンテナが落ちていれば自動で起動してから実行する
+# （初回はイメージのビルドも走る）ので、普段は up を打たなくてよい。
 #
 # エージェント CLI はイメージに両方入っている。AGENT はあくまで run/yolo の既定値で、
 # claude / opencode を直に指定すればいつでも切り替えられる。
@@ -41,6 +44,39 @@ HOST_UID="$(id -u)"; HOST_GID="$(id -g)"
 
 COMPOSE=(docker compose --env-file "$ENV_FILE" -p "$PROJECT")
 
+# コンテナに入るアクション(shell/run/claude/...)は、落ちていれば自動で起動する。
+# --build も付ける：キャッシュが効けば数秒で、Dockerfile や scripts/ を触った
+# ままの古いイメージで起動して healthcheck に落ちる、という事故を防げる。
+#
+# 既に走っているときは up し直さない：env を書き換えた直後だと compose が
+# コンテナを作り直してしまい、別ターミナルで動いているセッションを巻き込むため。
+# その場合は明示的に ./agent.sh <project> up する。
+ensure_up() {
+  local cid
+  cid="$("${COMPOSE[@]}" ps -q --status running agent 2>/dev/null || true)"
+  if [ -z "$cid" ]; then
+    echo "[agent.sh] $PROJECT: コンテナが起動していないので up します"
+    "${COMPOSE[@]}" up -d --build --wait   # --wait = healthy になるまで待つ
+    return
+  fi
+  wait_healthy "$cid"
+}
+
+# 起動中(entrypoint 実行中)に割り込んだ場合に備えて healthy を待つ。
+wait_healthy() {
+  local cid="$1" status i
+  for i in $(seq 1 60); do
+    # healthcheck を持たない古いコンテナでは空になる → 待たずに進む
+    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    case "$status" in
+      healthy|"") return 0 ;;
+    esac
+    [ "$i" = 1 ] && echo "[agent.sh] $PROJECT: 準備中(entrypoint)を待っています…"
+    sleep 1
+  done
+  echo "[agent.sh] warning: $PROJECT がまだ healthy になりません（このまま続行します）" >&2
+}
+
 # コンテナ内でエージェントを起動する。
 #   claude   … モデルは毎回 --model で渡す
 #   opencode … モデルは entrypoint が opencode.json に書いた既定値(llamacpp/<model>)を使う。
@@ -48,9 +84,11 @@ COMPOSE=(docker compose --env-file "$ENV_FILE" -p "$PROJECT")
 #              渡したときにパースが壊れる（グローバル位置の --model は受け付けない）。
 #              一時的に変えたいときは ./agent.sh <p> opencode --model llamacpp/<model>
 run_claude() {
+  ensure_up
   "${COMPOSE[@]}" exec agent claude --model "${CLAUDE_MODEL:-local-model}" "$@"
 }
 run_opencode() {
+  ensure_up
   "${COMPOSE[@]}" exec agent opencode "$@"
 }
 
@@ -67,8 +105,8 @@ case "$AGENT" in
 esac
 
 case "$ACTION" in
-  up)       "${COMPOSE[@]}" up -d --build ;;
-  shell)    "${COMPOSE[@]}" exec agent bash ;;
+  up)       "${COMPOSE[@]}" up -d --build --wait ;;
+  shell)    ensure_up; "${COMPOSE[@]}" exec agent bash ;;
   run)      run_default "${@:3}" ;;
   yolo)     run_default "$DEFAULT_YOLO" "${@:3}" ;;
   claude)   run_claude "${@:3}" ;;
