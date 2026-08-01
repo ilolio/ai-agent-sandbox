@@ -60,6 +60,43 @@ ensure_up() {
     return
   fi
   wait_healthy "$cid"
+  warn_env_drift "$cid"
+}
+
+# 実行中コンテナの env と現在の env ファイルのズレを検知して警告する。
+# ensure_up は実行中コンテナを作り直さない（上のコメント参照）ので、env を
+# 編集してもコンテナには反映されない。黙って古い設定（entrypoint が古い env で
+# 書いた opencode.json / settings.json）のまま動き続けると気づけないため、
+# ここで知らせる。up はしない——直すかどうかはユーザの判断に任せる。
+warn_env_drift() {
+  local cid="$1" cenv spec var want have drift=""
+  cenv="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null)" || return 0
+
+  # compose の environment: に渡している変数と、その既定値（compose 側と揃えること）。
+  # WORKSPACE(bind mount) は Docker Desktop がパスを書き換えるので比較できず、対象外。
+  for spec in \
+    LLAMA_HOST=host.docker.internal \
+    LLAMA_PORT=8080 \
+    CLAUDE_MODEL=local-model \
+    AGENT=claude \
+    OPENCODE_MODEL= \
+    OPENCODE_CTX=65536 \
+    OPENCODE_OUT=32000 \
+    ALLOWED_DOMAINS= \
+    ENABLE_FIREWALL=1
+  do
+    var="${spec%%=*}"
+    want="${!var:-${spec#*=}}"                            # env ファイル側（compose と同じ既定値で補完）
+    have="$(sed -n "s/^${var}=//p" <<<"$cenv")"           # コンテナ側
+    [ "$have" = "$want" ] || drift+="  ${var}: コンテナ='${have}' / env='${want}'"$'\n'
+  done
+
+  [ -z "$drift" ] && return 0
+  {
+    echo "[agent.sh] warning: $PROJECT: $ENV_FILE がコンテナ起動時から変わっています:"
+    printf '%s' "$drift"
+    echo "[agent.sh] 反映するには ./agent.sh $PROJECT up でコンテナを作り直してください"
+  } >&2
 }
 
 # 起動中(entrypoint 実行中)に割り込んだ場合に備えて healthy を待つ。
