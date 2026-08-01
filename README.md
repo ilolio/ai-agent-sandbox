@@ -47,8 +47,8 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 ```ini
 AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode）
 # OPENCODE_MODEL=     # 空なら CLAUDE_MODEL を使う
-OPENCODE_CTX=32768    # llama-server の --ctx-size に合わせる
-OPENCODE_OUT=8192
+OPENCODE_CTX=65536    # llama-server の --ctx-size に合わせる
+OPENCODE_OUT=32000    # 毎リクエストの max_tokens。OpenCode 内部の上限が ~32k なのでこれが実質上限
 ```
 
 ### OpenCode 側の設定

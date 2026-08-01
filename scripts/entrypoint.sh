@@ -61,8 +61,12 @@ echo "[entrypoint] synced settings.json (ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL
 # （id を "llama" にすると models.dev の同名プロバイダ(Meta Llama API)とマージされ、
 #   使えないモデルが候補に混ざるので避ける）
 OPENCODE_MODEL="${OPENCODE_MODEL:-${CLAUDE_MODEL:-local-model}}"
-OPENCODE_CTX="${OPENCODE_CTX:-32768}"
-OPENCODE_OUT="${OPENCODE_OUT:-8192}"
+OPENCODE_CTX="${OPENCODE_CTX:-65536}"
+# limit.output は OpenCode が毎リクエストの max_tokens に使う。小さいと出力が
+# 途中で切れる。OpenCode は内部的に 32k 程度で頭打ちにするので 32000 が実質上限。
+# ただし context - output が残りプロンプト予算（自動 compact の閾値）になるので、
+# ctx が小さいサーバでは OUT も下げること。
+OPENCODE_OUT="${OPENCODE_OUT:-32000}"
 
 # opencode.json は毎起動で env から作り直す（settings.json を同期するのと同じ理由で、
 # LLAMA_HOST/PORT や OPENCODE_MODEL を変えたときに古い値が残らないようにする）。
