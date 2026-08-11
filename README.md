@@ -10,9 +10,12 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 
 - host 側で llama-server が起動していること（Anthropic Messages API 対応版 = 2026/01 以降）
   ```
-  llama-server -hf unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --ctx-size 32768
+  llama-server -hf unsloth/Qwen3-Coder-30B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --ctx-size 131072
   ```
-  - Claude Code は最低 32K context 必要。8K/16K では実用にならない。
+  - Claude Code は最低 32K context 必要（8K/16K では実用にならない）。エージェントは
+    ツール結果やファイル内容を都度積むので、実用上は 128K 程度を既定にしておくとよい。
+  - `--ctx-size` の値は `project-configs/<project>.env` の `CLAUDE_CTX` / `OPENCODE_CTX` と
+    揃えること。揃っていないとエージェント側が context 残量を誤認する。
   - `--host 0.0.0.0` にしないとコンテナから届かない。
   - Claude Code は Anthropic 互換の口、OpenCode は OpenAI 互換の `/v1` を使う。
     llama-server は同じポートで両方出すので、追加の起動オプションは不要。
@@ -24,7 +27,7 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 |------|----------|
 | プロジェクトごとに分離 | compose の `-p <project>` で別コンテナ・別ネットワーク |
 | ファイルのやり取りは特定フォルダだけ | `WORKSPACE` を `/workspace` に bind mount。それ以外は一切見えない |
-| Claude Code を llama.cpp で | entrypoint が `ANTHROPIC_BASE_URL` を host の llama-server に向け、`~/.claude/settings.json` を初期生成 |
+| Claude Code を llama.cpp で | entrypoint が `~/.claude/settings.json` に `ANTHROPIC_BASE_URL` とローカルモデル前提の設定（エイリアス解決先・context 上限・thinking / caching オフ等）を生成 |
 | OpenCode を llama.cpp で | entrypoint が `~/.config/opencode/opencode.json` に OpenAI 互換プロバイダ `llamacpp` を生成 |
 | エージェントを選ぶ | 両方インストール済み。`AGENT` が既定値、`./agent.sh <p> claude\|opencode` で都度切替 |
 | egress をコンテナごとに制御 | 起動時 `init-firewall.sh` が iptables でホワイトリスト以外を drop |
@@ -46,10 +49,39 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 
 ```ini
 AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode）
+CLAUDE_CTX=131072     # llama-server の --ctx-size に合わせる
+CLAUDE_OUT=32000      # Claude Code の毎リクエスト max_tokens 上限
 # OPENCODE_MODEL=     # 空なら CLAUDE_MODEL を使う
-OPENCODE_CTX=65536    # llama-server の --ctx-size に合わせる
+OPENCODE_CTX=131072   # llama-server の --ctx-size に合わせる
 OPENCODE_OUT=32000    # 毎リクエストの max_tokens。OpenCode 内部の上限が ~32k なのでこれが実質上限
 ```
+
+### Claude Code 側の設定
+
+entrypoint が毎起動で `~/.claude/settings.json` の `env` ブロックを生成する。
+Claude Code は本家 API（複数モデル・巨大 context・thinking / prompt caching あり）を前提に
+動くので、**モデルが llama-server の 1 個だけ**という前提に合わせて次を書き込んでいる。
+
+| 区分 | キー | なぜ要るか |
+|------|------|-----------|
+| 接続 | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` | llama-server の Anthropic 互換の口に向ける。トークンはダミー |
+| モデル解決 | `ANTHROPIC_MODEL` | 既定モデル。コンテナ内で直に `claude` を叩いたときに効く（`agent.sh` は `--model` も渡す） |
+| モデル解決 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | **haiku エイリアスと「バックグラウンド処理」の解決先**。会話要約などが裏で走るので、向けておかないと存在しない `claude-haiku-...` を要求してしまう |
+| モデル解決 | `ANTHROPIC_DEFAULT_OPUS_MODEL` / `_SONNET_MODEL` / `_FABLE_MODEL` | `/model` のエイリアスをすべてローカルモデルに寄せる |
+| モデル解決 | `CLAUDE_CODE_SUBAGENT_MODEL` | サブエージェント / エージェントチームのモデル。定義側の `model` 指定より優先される |
+| モデル解決 | `ANTHROPIC_CUSTOM_MODEL_OPTION`(+`_NAME`) | `/model` のピッカーに `llama-server (local)` として実名で出す |
+| context | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = `CLAUDE_CTX` | 未知のモデル ID だと Claude Code は独自に仮定した context 幅（値は非公開）で compact する。実サイズを教えないと自動 compact の閾値が `--ctx-size` とズレる |
+| context | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` = `CLAUDE_OUT` | 毎リクエストの max_tokens。大きいほど自動 compact が早まる（プロンプト予算が減る） |
+| 機能オフ | `MAX_THINKING_TOKENS=0` / `DISABLE_INTERLEAVED_THINKING` / `DISABLE_PROMPT_CACHING` | llama-server が解さない thinking パラメータ・beta ヘッダ・`cache_control` を送らない |
+| タイムアウト | `API_TIMEOUT_MS` / `CLAUDE_CODE_STREAM_IDLE_TIMEOUT_MS` / `API_FORCE_IDLE_TIMEOUT=0` | ローカル推論は遅い。既定（1 リクエスト 10 分 / 無進捗 5 分）だと prompt 処理中に切られる |
+| オフライン | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` / `DISABLE_AUTOUPDATER` / `DISABLE_TELEMETRY` / `DISABLE_ERROR_REPORTING` | telemetry・エラー報告・自動更新・リリースノート取得を止める。egress を絞っている構成では無駄に叩かせない |
+| オフライン | `DISABLE_COST_WARNINGS` | ローカルモデルは課金されないのでコスト警告が無意味 |
+
+プロジェクトごとに変えたいのは実質 `CLAUDE_CTX` / `CLAUDE_OUT` だけなので、env に出しているのはこの 2 つ。
+それ以外を変えたいときは `scripts/entrypoint.sh` の jq ブロックを編集して `./agent.sh <p> up`。
+
+> `settings.json` は永続ボリューム上にあり、entrypoint は上記の管理キーだけを上書きする。
+> `theme` など自分で足した設定は消えない。
 
 ### OpenCode 側の設定
 

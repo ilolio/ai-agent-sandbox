@@ -28,21 +28,81 @@ export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-llamacpp-local}"
 # 実 API キーが環境に残っていると誤送信するので明示的に消す
 unset ANTHROPIC_API_KEY || true
 
+CLAUDE_MODEL="${CLAUDE_MODEL:-local-model}"
+# Claude Code に伝えるモデルの context/output 上限。OPENCODE_CTX/OUT と同じ役割。
+# CTX は llama-server の --ctx-size に合わせる。OUT は毎リクエストの max_tokens 上限で、
+# CTX - OUT が残りプロンプト予算（自動 compact の閾値）になる。
+CLAUDE_CTX="${CLAUDE_CTX:-131072}"
+CLAUDE_OUT="${CLAUDE_OUT:-32000}"
+
 # settings.json の管理キーを毎起動で同期する。
 # settings.json は永続ボリューム上にあるので、env(LLAMA_HOST/PORT)を変えても
 # 古い ANTHROPIC_BASE_URL が残り続ける。既存の他キー(theme 等)は保持しつつ、
 # env ブロックだけを現在値で上書きする（jq は base イメージに同梱）。
+#
+# ここで書く env は「ローカルモデル 1 個しか居ない」前提の設定。素の Claude Code は
+# 本家 API のモデル群を前提に動くので、そのままだと llama-server に存在しないモデル名を
+# 要求したり、本家の context/機能を前提にした値を使ってしまう。
 mkdir -p "$HOME/.claude"
 SETTINGS="$HOME/.claude/settings.json"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 tmp="$(mktemp)"
-jq --arg base "$ANTHROPIC_BASE_URL" --arg token "$ANTHROPIC_AUTH_TOKEN" '
+jq --arg base  "$ANTHROPIC_BASE_URL" \
+   --arg token "$ANTHROPIC_AUTH_TOKEN" \
+   --arg model "$CLAUDE_MODEL" \
+   --arg ctx   "$CLAUDE_CTX" \
+   --arg out   "$CLAUDE_OUT" '
   .env = (.env // {}) + {
     ANTHROPIC_BASE_URL: $base,
     ANTHROPIC_AUTH_TOKEN: $token,
+
+    # --- モデル解決: 全エイリアスをローカルモデルに寄せる ---
+    # 既定モデル。agent.sh は --model も渡すが、コンテナ内で直に `claude` を
+    # 叩いたとき（shell 経由など）はこちらが効く。
+    ANTHROPIC_MODEL: $model,
+    # opus/sonnet/haiku/fable の各エイリアスの解決先。特に HAIKU は
+    # /model の選択肢だけでなく「バックグラウンド処理」(会話要約など)にも使われるので、
+    # ここを向けておかないと裏で claude-haiku-... を要求して 404 になる。
+    ANTHROPIC_DEFAULT_OPUS_MODEL:   $model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: $model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL:  $model,
+    ANTHROPIC_DEFAULT_FABLE_MODEL:  $model,
+    # サブエージェント/エージェントチームのモデル。定義側の model 指定より優先される。
+    CLAUDE_CODE_SUBAGENT_MODEL: $model,
+    # /model のピッカーに実名で 1 行出す（BASE_URL 差し替え時は表示名も効く）
+    ANTHROPIC_CUSTOM_MODEL_OPTION: $model,
+    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "llama-server (local)",
+
+    # --- context / 出力トークン ---
+    # 未知のモデル ID だと Claude Code は独自に仮定した context 幅で compact する
+    # （仮定値は非公開）。llama-server の実サイズと食い違うので明示的に教える。
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: $ctx,
+    # 未知のモデル ID のときの Claude Code 既定と同じ 32000。大きいほど自動 compact が
+    # 早まる（= プロンプトに使える残りが減る）ので、CTX が小さいサーバでは下げること。
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: $out,
+
+    # --- llama-server が解さない機能を切る ---
+    # thinking パラメータを送らない（0 = 思考オフ）
+    MAX_THINKING_TOKENS: "0",
+    # interleaved thinking の beta ヘッダを送らない
+    DISABLE_INTERLEAVED_THINKING: "1",
+    # cache_control ブロックを送らない（Anthropic のプロンプトキャッシュ用）
+    DISABLE_PROMPT_CACHING: "1",
+
+    # --- ローカル推論は遅いのでタイムアウトを伸ばす ---
+    API_TIMEOUT_MS: "1800000",                   # 1 リクエストの上限 30 分（既定 10 分）
+    CLAUDE_CODE_STREAM_IDLE_TIMEOUT_MS: "1800000",  # 無進捗の監視 30 分（上限値。既定 5 分）
+    API_FORCE_IDLE_TIMEOUT: "0",                 # 5 分無バイトで中断する挙動を無効化
+
+    # --- オフライン前提（egress はホワイトリストで塞いである）---
+    # telemetry / エラー報告 / 自動更新チェック / リリースノート取得をまとめて止める
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_AUTOUPDATER: "1",
     CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
     DISABLE_TELEMETRY: "1",
-    DISABLE_ERROR_REPORTING: "1"
+    DISABLE_ERROR_REPORTING: "1",
+    # ローカルモデルは課金されないのでコスト警告は無意味
+    DISABLE_COST_WARNINGS: "1"
   } |
   .permissions = {
     "allow": ["Read", "Edit", "Write"],
@@ -61,7 +121,7 @@ echo "[entrypoint] synced settings.json (ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL
 # （id を "llama" にすると models.dev の同名プロバイダ(Meta Llama API)とマージされ、
 #   使えないモデルが候補に混ざるので避ける）
 OPENCODE_MODEL="${OPENCODE_MODEL:-${CLAUDE_MODEL:-local-model}}"
-OPENCODE_CTX="${OPENCODE_CTX:-65536}"
+OPENCODE_CTX="${OPENCODE_CTX:-131072}"
 # limit.output は OpenCode が毎リクエストの max_tokens に使う。小さいと出力が
 # 途中で切れる。OpenCode は内部的に 32k 程度で頭打ちにするので 32000 が実質上限。
 # ただし context - output が残りプロンプト予算（自動 compact の閾値）になるので、
@@ -115,8 +175,8 @@ jq -n \
 }' > "$tmp" && mv "$tmp" "$OPENCODE_CONF"
 echo "[entrypoint] wrote opencode.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
 
-echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL:-local-model})"
-echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL})"
+echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL}, ctx: ${CLAUDE_CTX}, out: ${CLAUDE_OUT})"
+echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL}, ctx: ${OPENCODE_CTX}, out: ${OPENCODE_OUT})"
 echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
 
