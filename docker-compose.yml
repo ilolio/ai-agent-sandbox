@@ -43,6 +43,10 @@ services:
       LLAMA_HOST: ${LLAMA_HOST:-host.docker.internal}
       LLAMA_PORT: ${LLAMA_PORT:-8080}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-local-model}
+      # Claude Code に伝えるモデルの context/output 上限（llama-server の実際の
+      # --ctx-size に合わせる）。entrypoint が settings.json に書く。
+      CLAUDE_CTX: ${CLAUDE_CTX:-131072}
+      CLAUDE_OUT: ${CLAUDE_OUT:-32000}
       # ★既定のエージェント（claude | opencode）。CLI は両方入っているので
       #   ./agent.sh <p> claude / opencode で都度上書きできる。
       AGENT: ${AGENT:-claude}
@@ -50,7 +54,7 @@ services:
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
       # OpenCode に伝えるモデルの context/output 上限（llama-server の実際の
       # --ctx-size に合わせる。大きすぎるとサーバ側でエラーになる）
-      OPENCODE_CTX: ${OPENCODE_CTX:-65536}
+      OPENCODE_CTX: ${OPENCODE_CTX:-131072}
       OPENCODE_OUT: ${OPENCODE_OUT:-32000}
       # ★コンテナ（プロジェクト）ごとに違うホワイトリスト
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
