@@ -56,6 +56,9 @@ services:
       # --ctx-size に合わせる。大きすぎるとサーバ側でエラーになる）
       OPENCODE_CTX: ${OPENCODE_CTX:-131072}
       OPENCODE_OUT: ${OPENCODE_OUT:-32000}
+      # OpenCode 内部の 32k クランプを外す実験的フラグ（空なら 32000 のまま）。
+      # 詳細は env.example 参照。
+      OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: ${OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX:-}
       # ★コンテナ（プロジェクト）ごとに違うホワイトリスト
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
       ENABLE_FIREWALL: ${ENABLE_FIREWALL:-1}
