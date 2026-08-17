@@ -15,8 +15,8 @@
 #   - エージェント CLI(要 Node) + egress 制御に使うツール + 非 root ユーザ + firewall
 #   - 各言語ステージはこの base を継承して言語ツールだけ足す
 #
-#   エージェントは Claude Code / OpenCode の両方を常に入れておき、
-#   どちらを起動するかは実行時(agent.sh のアクション or env の AGENT)に選ぶ。
+#   エージェントは Claude Code / OpenCode / pi の 3 つを常に入れておき、
+#   どれを起動するかは実行時(agent.sh のアクション or env の AGENT)に選ぶ。
 #   ビルド時に切り替えないのは、同じ flavor のイメージタグを共有したいため
 #   （切り替えるたびに再ビルドが走るのを避ける）。
 # ============================================================
@@ -29,10 +29,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo procps less \
     && rm -rf /var/lib/apt/lists/*
 
-# --- エージェント CLI（両方入れる。起動時にどちらを使うか選ぶ）---
-#   @anthropic-ai/claude-code : Anthropic 公式 CLI
-#   opencode-ai               : OpenCode (MIT)。platform 別バイナリを optionalDeps で取る
-RUN npm install -g @anthropic-ai/claude-code opencode-ai \
+# --- エージェント CLI（全部入れる。起動時にどれを使うか選ぶ）---
+#   @anthropic-ai/claude-code        : Anthropic 公式 CLI
+#   opencode-ai                      : OpenCode (MIT)。platform 別バイナリを optionalDeps で取る
+#   @earendil-works/pi-coding-agent  : pi (MIT)。コマンド名は `pi`。要 Node >= 22.19（base の node:22 で満たす）
+#     旧名の @mariozechner/pi-coding-agent は deprecated なので earendil-works 側を入れる。
+RUN npm install -g @anthropic-ai/claude-code opencode-ai @earendil-works/pi-coding-agent \
     && npm cache clean --force
 
 # --- 非 root ユーザ。host の uid/gid に合わせて build 時に上書き可 ---
@@ -57,6 +59,11 @@ RUN mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
 # OpenCode の設定ディレクトリ。中身は entrypoint が毎起動で生成する。
 # セッション/認証などのデータは ~/.local/share/opencode（下の永続ボリューム側）に入る。
 RUN mkdir -p /home/node/.config/opencode && chown -R node:node /home/node/.config
+
+# pi の設定ディレクトリ (~/.pi/agent)。settings.json / models.json は entrypoint が毎起動で
+# 整えるが、セッション履歴・auth.json・pi install で入れたパッケージも同じ ~/.pi 配下に入るので、
+# ディレクトリごと永続ボリュームにする（.claude と同じく node 所有で作っておく）。
+RUN mkdir -p /home/node/.pi/agent && chown -R node:node /home/node/.pi
 
 # --- 実行時に入れたツールの置き場（永続ボリューム）---
 # コンテナの書き込みレイヤは `up --build` での再作成で消えるので、
