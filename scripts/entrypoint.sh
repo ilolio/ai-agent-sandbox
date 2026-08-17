@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # 1) egress ファイアウォールを張る
-# 2) Claude Code / OpenCode を llama.cpp(ホスト) に向ける設定を毎起動で整える
+# 2) Claude Code / OpenCode / pi を llama.cpp(ホスト) に向ける設定を毎起動で整える
 # 3) 渡されたコマンド（既定: bash）を実行
 #
-# どちらのエージェントを使うかは実行時に選ぶ（agent.sh のアクション、既定は env の AGENT）。
-# 両方の設定を毎回書いておくので、片方しか使わなくても害はない。
+# どのエージェントを使うかは実行時に選ぶ（agent.sh のアクション、既定は env の AGENT）。
+# 3 つ分の設定を毎回書いておくので、1 つしか使わなくても害はない。
 #
 set -euo pipefail
 
@@ -175,8 +175,90 @@ jq -n \
 }' > "$tmp" && mv "$tmp" "$OPENCODE_CONF"
 echo "[entrypoint] wrote opencode.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
 
+# --- 4) pi を llama.cpp に向ける（OpenCode と同じく OpenAI 互換の /v1）---
+# pi は「カスタムプロバイダ」を ~/.pi/agent/models.json で宣言的に足せる。
+# provider id は OpenCode 側と揃えて llamacpp 固定 → モデル指定は "llamacpp/<model>"。
+PI_MODEL="${PI_MODEL:-${CLAUDE_MODEL:-local-model}}"
+PI_CTX="${PI_CTX:-131072}"
+# maxTokens は pi が毎リクエストの max_tokens に使う。OpenCode のような内部クランプは無い。
+PI_OUT="${PI_OUT:-32000}"
+
+mkdir -p "$HOME/.pi/agent"
+
+# models.json は毎起動で env から作り直す（opencode.json と同じ理由）。
+# pi 自身が書くのは models-store.json / auth.json / trust.json / sessions なので、
+# このファイルを丸ごと上書きしても pi 側の状態は壊れない。
+PI_MODELS="$HOME/.pi/agent/models.json"
+tmp="$(mktemp)"
+jq -n \
+  --arg base  "http://${LLAMA_HOST}:${LLAMA_PORT}/v1" \
+  --arg model "$PI_MODEL" \
+  --argjson ctx "$PI_CTX" \
+  --argjson out "$PI_OUT" '
+{
+  providers: {
+    llamacpp: {
+      baseUrl: $base,
+      api: "openai-completions",
+      # ローカルサーバなのでダミーで良い。ただし pi は「認証が設定されていないモデル」を
+      # /model の候補から外すので、空にはしないこと。
+      apiKey: "llamacpp-local",
+      # llama-server が解さない／要らない OpenAI 拡張を送らないための互換フラグ。
+      compat: {
+        # system プロンプトを developer ロールではなく system ロールで送る
+        supportsDeveloperRole: false,
+        # reasoning_effort を送らない（下の reasoning:false と対）
+        supportsReasoningEffort: false,
+        # store フィールド（OpenAI のログ保存）を送らない
+        supportsStore: false,
+        # max_completion_tokens ではなく max_tokens を使う
+        maxTokensField: "max_tokens"
+      },
+      models: [
+        {
+          id: $model,
+          name: "llama-server (local)",
+          # Claude Code 側の MAX_THINKING_TOKENS=0 と同じ方針で thinking は使わない
+          reasoning: false,
+          input: ["text"],
+          contextWindow: $ctx,
+          maxTokens: $out,
+          # ローカルモデルは課金されないので全部 0（pi のコスト表示が 0 になる）
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        }
+      ]
+    }
+  }
+}' > "$tmp" && mv "$tmp" "$PI_MODELS"
+
+# settings.json は Claude Code 側と同じく「管理キーだけ上書き」。
+# theme や自分で入れた packages/extensions の設定は消さない。
+PI_SETTINGS="$HOME/.pi/agent/settings.json"
+[ -f "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
+tmp="$(mktemp)"
+jq --arg model "$PI_MODEL" \
+   --argjson out "$PI_OUT" '
+  . + {
+    # 既定のモデル。pi の --provider 既定は google なので、これが無いと
+    # コンテナ内で直に `pi` を叩いたときに存在しないプロバイダを見に行く。
+    defaultProvider: "llamacpp",
+    defaultModel: $model,
+    # models.json の reasoning:false と対。thinking レベルを送らない
+    defaultThinkingLevel: "off",
+    # インストール/更新時の匿名 ping を止める（PI_OFFLINE でも止まるが明示しておく）
+    enableInstallTelemetry: false
+  } |
+  # 自動 compact のために空けておく分。CLAUDE_OUT / OPENCODE_OUT と同じ考え方で
+  # contextWindow - reserveTokens が実質のプロンプト予算になる。
+  .compaction = ((.compaction // {}) + { reserveTokens: $out }) |
+  # ローカル推論は遅いので 1 リクエストの上限を 30 分に伸ばす（既定は SDK 任せ）
+  .retry = ((.retry // {}) + { provider: ((.retry.provider // {}) + { timeoutMs: 1800000 }) })
+  ' "$PI_SETTINGS" > "$tmp" && mv "$tmp" "$PI_SETTINGS"
+echo "[entrypoint] wrote pi models.json / synced settings.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
+
 echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL}, ctx: ${CLAUDE_CTX}, out: ${CLAUDE_OUT})"
 echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL}, ctx: ${OPENCODE_CTX}, out: ${OPENCODE_OUT})"
+echo "[entrypoint] pi          -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${PI_MODEL}, ctx: ${PI_CTX}, out: ${PI_OUT})"
 echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
 
