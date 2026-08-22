@@ -10,21 +10,22 @@
 #   ./agent.sh <project> cc          # Claude Code・全承認スキップ
 #   ./agent.sh <project> opencode    # OpenCode を起動
 #   ./agent.sh <project> oc          # OpenCode・全承認スキップ
+#   ./agent.sh <project> pi          # pi を起動（pi は承認プロンプトを持たないので常に全自動）
 #   ./agent.sh <project> down        # 停止・削除
 #   ./agent.sh <project> logs        # ログ
 #
 # up 以外のアクションは、コンテナが落ちていれば自動で起動してから実行する
 # （初回はイメージのビルドも走る）ので、普段は up を打たなくてよい。
 #
-# エージェント CLI はイメージに両方入っている。AGENT はあくまで run/yolo の既定値で、
-# claude / opencode を直に指定すればいつでも切り替えられる。
+# エージェント CLI はイメージに 3 つとも入っている。AGENT はあくまで run/yolo の既定値で、
+# claude / opencode / pi を直に指定すればいつでも切り替えられる。
 #
 # 各プロジェクトの設定は project-configs/<project>.env に置く（env.example 参照）。
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
-USAGE="usage: ./agent.sh <project> <up|shell|run|yolo|claude|cc|opencode|oc|down|logs>"
+USAGE="usage: ./agent.sh <project> <up|shell|run|yolo|claude|cc|opencode|oc|pi|down|logs>"
 PROJECT="${1:?$USAGE}"
 ACTION="${2:?$USAGE}"
 
@@ -85,6 +86,9 @@ warn_env_drift() {
     OPENCODE_CTX=131072 \
     OPENCODE_OUT=32000 \
     OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX= \
+    PI_MODEL= \
+    PI_CTX=131072 \
+    PI_OUT=32000 \
     ALLOWED_DOMAINS= \
     ENABLE_FIREWALL=1
   do
@@ -123,6 +127,10 @@ wait_healthy() {
 #              ここで --model を足すと `opencode run ...` のようにサブコマンドを
 #              渡したときにパースが壊れる（グローバル位置の --model は受け付けない）。
 #              一時的に変えたいときは ./agent.sh <p> opencode --model llamacpp/<model>
+#   pi       … opencode と同じ理由で --model を渡さない（`pi install ...` などの
+#              サブコマンドがある）。既定は entrypoint が settings.json に書く
+#              defaultProvider/defaultModel。都度変えるなら
+#              ./agent.sh <p> pi --model llamacpp/<model>
 run_claude() {
   ensure_up
   "${COMPOSE[@]}" exec agent claude --model "${CLAUDE_MODEL:-local-model}" "$@"
@@ -131,28 +139,36 @@ run_opencode() {
   ensure_up
   "${COMPOSE[@]}" exec agent opencode "$@"
 }
+run_pi() {
+  ensure_up
+  "${COMPOSE[@]}" exec agent pi "$@"
+}
 
-# 承認スキップのフラグも CLI ごとに違う
-CLAUDE_YOLO=--dangerously-skip-permissions
-OPENCODE_YOLO=--auto
+# 承認スキップの渡し方も CLI ごとに違うので、yolo 版は関数で持つ。
+# pi は「承認プロンプトを持たない」設計なので素の起動と同じ（README のパーミッション参照）。
+run_claude_yolo()   { run_claude   --dangerously-skip-permissions "$@"; }
+run_opencode_yolo() { run_opencode --auto "$@"; }
+run_pi_yolo()       { run_pi "$@"; }
 
 # run/yolo が使う既定エージェント。ここで一度だけ検証しておく。
 AGENT="${AGENT:-claude}"
 case "$AGENT" in
-  claude)   run_default() { run_claude   "$@"; }; DEFAULT_YOLO="$CLAUDE_YOLO"   ;;
-  opencode) run_default() { run_opencode "$@"; }; DEFAULT_YOLO="$OPENCODE_YOLO" ;;
-  *)        echo "unknown AGENT in $ENV_FILE: $AGENT (claude|opencode)"; exit 1 ;;
+  claude)   run_default() { run_claude   "$@"; }; run_default_yolo() { run_claude_yolo   "$@"; } ;;
+  opencode) run_default() { run_opencode "$@"; }; run_default_yolo() { run_opencode_yolo "$@"; } ;;
+  pi)       run_default() { run_pi       "$@"; }; run_default_yolo() { run_pi_yolo       "$@"; } ;;
+  *)        echo "unknown AGENT in $ENV_FILE: $AGENT (claude|opencode|pi)"; exit 1 ;;
 esac
 
 case "$ACTION" in
   up)       "${COMPOSE[@]}" up -d --build --wait ;;
   shell)    ensure_up; "${COMPOSE[@]}" exec agent bash ;;
   run)      run_default "${@:3}" ;;
-  yolo)     run_default "$DEFAULT_YOLO" "${@:3}" ;;
+  yolo)     run_default_yolo "${@:3}" ;;
   claude)   run_claude "${@:3}" ;;
-  cc)       run_claude "$CLAUDE_YOLO" "${@:3}" ;;
+  cc)       run_claude_yolo "${@:3}" ;;
   opencode) run_opencode "${@:3}" ;;
-  oc)       run_opencode "$OPENCODE_YOLO" "${@:3}" ;;
+  oc)       run_opencode_yolo "${@:3}" ;;
+  pi)       run_pi "${@:3}" ;;
   down)     "${COMPOSE[@]}" down ;;
   logs)     "${COMPOSE[@]}" logs -f ;;
   *)        echo "unknown action: $ACTION"; echo "$USAGE"; exit 1 ;;

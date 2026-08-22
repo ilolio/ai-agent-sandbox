@@ -34,6 +34,9 @@ services:
       # ここに無いものはコンテナ再作成で消える。
       # OpenCode のセッション/履歴(~/.local/share/opencode)もここに入る。
       - local-tools:/home/node/.local
+      # pi の設定・セッション履歴・auth.json・pi install で入れたパッケージ。
+      # models.json と settings.json の管理キーは毎起動 entrypoint が整える。
+      - pi-config:/home/node/.pi
       # OpenCode の設定。opencode.json 自体は毎起動 entrypoint が作り直すが、
       # 実行時に npm から取るプロバイダ SDK(node_modules)が同じ場所に落ちるので、
       # 永続化しておくとコンテナ再作成のたびに registry.npmjs.org を叩かずに済む。
@@ -47,8 +50,8 @@ services:
       # --ctx-size に合わせる）。entrypoint が settings.json に書く。
       CLAUDE_CTX: ${CLAUDE_CTX:-131072}
       CLAUDE_OUT: ${CLAUDE_OUT:-32000}
-      # ★既定のエージェント（claude | opencode）。CLI は両方入っているので
-      #   ./agent.sh <p> claude / opencode で都度上書きできる。
+      # ★既定のエージェント（claude | opencode | pi）。CLI は 3 つとも入っているので
+      #   ./agent.sh <p> claude / opencode / pi で都度上書きできる。
       AGENT: ${AGENT:-claude}
       # OpenCode 用。空なら CLAUDE_MODEL を使う。
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
@@ -59,6 +62,15 @@ services:
       # OpenCode 内部の 32k クランプを外す実験的フラグ（空なら 32000 のまま）。
       # 詳細は env.example 参照。
       OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: ${OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX:-}
+      # pi 用。空なら CLAUDE_MODEL を使う。
+      PI_MODEL: ${PI_MODEL:-}
+      # pi に伝えるモデルの context/output 上限（llama-server の実際の --ctx-size に合わせる）
+      PI_CTX: ${PI_CTX:-131072}
+      PI_OUT: ${PI_OUT:-32000}
+      # pi の起動時ネットワーク処理（バージョン確認・パッケージ更新確認・telemetry）を止める。
+      # entrypoint で export しても `docker compose exec` には効かないのでここで渡す。
+      # egress を絞っている構成では、届かない先への接続がタイムアウトまで待たされるだけなので切る。
+      PI_OFFLINE: "1"
       # ★コンテナ（プロジェクト）ごとに違うホワイトリスト
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
       ENABLE_FIREWALL: ${ENABLE_FIREWALL:-1}
@@ -86,3 +98,4 @@ volumes:
   claude-config:
   local-tools:
   opencode-config:
+  pi-config:

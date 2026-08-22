@@ -4,7 +4,7 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 **プロジェクトごとに独立したコンテナ・特定フォルダのみアクセス・コンテナ別 egress ホワイトリスト**
 を実現する構成。
 
-エージェントは **Claude Code** と **OpenCode** の両方がイメージに入っていて、起動時に選ぶ。
+エージェントは **Claude Code** / **OpenCode** / **pi** の 3 つがイメージに入っていて、起動時に選ぶ。
 
 ## 前提
 
@@ -14,10 +14,10 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
   ```
   - Claude Code は最低 32K context 必要（8K/16K では実用にならない）。エージェントは
     ツール結果やファイル内容を都度積むので、実用上は 128K 程度を既定にしておくとよい。
-  - `--ctx-size` の値は `project-configs/<project>.env` の `CLAUDE_CTX` / `OPENCODE_CTX` と
-    揃えること。揃っていないとエージェント側が context 残量を誤認する。
+  - `--ctx-size` の値は `project-configs/<project>.env` の `CLAUDE_CTX` / `OPENCODE_CTX` /
+    `PI_CTX` と揃えること。揃っていないとエージェント側が context 残量を誤認する。
   - `--host 0.0.0.0` にしないとコンテナから届かない。
-  - Claude Code は Anthropic 互換の口、OpenCode は OpenAI 互換の `/v1` を使う。
+  - Claude Code は Anthropic 互換の口、OpenCode と pi は OpenAI 互換の `/v1` を使う。
     llama-server は同じポートで両方出すので、追加の起動オプションは不要。
 - Docker / Docker Compose v2
 
@@ -29,31 +29,40 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 | ファイルのやり取りは特定フォルダだけ | `WORKSPACE` を `/workspace` に bind mount。それ以外は一切見えない |
 | Claude Code を llama.cpp で | entrypoint が `~/.claude/settings.json` に `ANTHROPIC_BASE_URL` とローカルモデル前提の設定（エイリアス解決先・context 上限・thinking / caching オフ等）を生成 |
 | OpenCode を llama.cpp で | entrypoint が `~/.config/opencode/opencode.json` に OpenAI 互換プロバイダ `llamacpp` を生成 |
-| エージェントを選ぶ | 両方インストール済み。`AGENT` が既定値、`./agent.sh <p> claude\|opencode` で都度切替 |
+| pi を llama.cpp で | entrypoint が `~/.pi/agent/models.json` に OpenAI 互換プロバイダ `llamacpp` を、`settings.json` に既定モデル等を生成 |
+| エージェントを選ぶ | 3 つともインストール済み。`AGENT` が既定値、`./agent.sh <p> claude\|opencode\|pi` で都度切替 |
 | egress をコンテナごとに制御 | 起動時 `init-firewall.sh` が iptables でホワイトリスト以外を drop |
 | 言語ごとにイメージを選択 | `Dockerfile` をマルチステージ化し、`FLAVOR` で build target を切替 |
 | 後から入れたツールを残す | `~/.local` を名前付きボリューム化し、`PATH` に image の `ENV` として追加 |
 
 ## エージェント(CLI)の選択
 
-イメージには **Claude Code** と **OpenCode** の両方が入っている。ビルド時ではなく実行時に選ぶので、
+イメージには **Claude Code** / **OpenCode** / **pi** の 3 つが入っている。ビルド時ではなく実行時に選ぶので、
 イメージは flavor 単位のまま（`AGENT` を変えても再ビルドは起きない）。
 
 | エージェント | 起動 | 全承認スキップ | llama-server の口 |
 |---|---|---|---|
 | Claude Code | `./agent.sh <p> claude` | `./agent.sh <p> cc` | Anthropic 互換 (`http://host:port`) |
 | OpenCode | `./agent.sh <p> opencode` | `./agent.sh <p> oc` | OpenAI 互換 (`http://host:port/v1`) |
+| pi | `./agent.sh <p> pi` | （不要・後述） | OpenAI 互換 (`http://host:port/v1`) |
 | `AGENT` の既定 | `./agent.sh <p> run` | `./agent.sh <p> yolo` | — |
+
+> pi は**承認プロンプトの仕組みそのものを持たない**（[設計方針](https://github.com/earendil-works/pi)として
+> permission popup / MCP / サブエージェント等を入れていない）。つまり pi は常に「全承認スキップ」相当で動く。
+> `./agent.sh <p> yolo`（AGENT=pi のとき）は `pi` と同じ起動になる。詳細は下の「パーミッション設定」参照。
 
 `project-configs/<project>.env`:
 
 ```ini
-AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode）
+AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode | pi）
 CLAUDE_CTX=131072     # llama-server の --ctx-size に合わせる
 CLAUDE_OUT=32000      # Claude Code の毎リクエスト max_tokens 上限
 # OPENCODE_MODEL=     # 空なら CLAUDE_MODEL を使う
 OPENCODE_CTX=131072   # llama-server の --ctx-size に合わせる
 OPENCODE_OUT=32000    # 毎リクエストの max_tokens。OpenCode 内部の上限が ~32k なのでこれが実質上限
+# PI_MODEL=           # 空なら CLAUDE_MODEL を使う
+PI_CTX=131072         # llama-server の --ctx-size に合わせる
+PI_OUT=32000          # 毎リクエストの max_tokens 兼 compaction.reserveTokens
 ```
 
 ### Claude Code 側の設定
@@ -105,9 +114,58 @@ OpenCode はグローバル設定とプロジェクト設定をマージし、�
 > 初回起動には `registry.npmjs.org` への egress が要る。モデルカタログの取得には `models.dev`。
 > 取得後は `opencode-config` ボリュームに残るので、以降は完全遮断でも動く。
 
+### pi 側の設定
+
+[pi](https://github.com/earendil-works/pi)（npm: `@earendil-works/pi-coding-agent`、コマンド名 `pi`）は
+カスタムプロバイダを **JSON で宣言的に足せる**ので、entrypoint が毎起動で 2 ファイルを整える。
+
+| ファイル | 扱い | 中身 |
+|---|---|---|
+| `~/.pi/agent/models.json` | 毎起動で作り直す | llama-server を `llamacpp` プロバイダ（`openai-completions`）として登録。モデルは 1 個だけ |
+| `~/.pi/agent/settings.json` | 管理キーだけ上書き | 既定モデル・thinking オフ・compaction・タイムアウト |
+
+`models.json` に書いている主なキー:
+
+| キー | 値 | なぜ要るか |
+|------|----|-----------|
+| `baseUrl` / `api` | `http://host:port/v1` / `openai-completions` | llama-server の OpenAI 互換の口に向ける |
+| `apiKey` | `llamacpp-local`（ダミー） | pi は「認証が設定されていないモデル」を `/model` の候補から外すので、空にできない |
+| `contextWindow` / `maxTokens` | `PI_CTX` / `PI_OUT` | 未知のモデルの既定は 128K / 16K。実サイズを教えないと compact の閾値がズレる |
+| `reasoning: false` | — | Claude Code 側の `MAX_THINKING_TOKENS=0` と同じ方針。thinking パラメータを送らない |
+| `compat.supportsDeveloperRole: false` | — | system プロンプトを `developer` ロールではなく `system` ロールで送る（llama-server 向け） |
+| `compat.supportsReasoningEffort: false` | — | `reasoning_effort` を送らない |
+| `compat.supportsStore: false` | — | OpenAI のログ保存フラグ `store` を送らない |
+| `compat.maxTokensField: max_tokens` | — | `max_completion_tokens` ではなく `max_tokens` で上限を渡す |
+
+`settings.json` に書いている管理キー:
+
+| キー | 値 | なぜ要るか |
+|------|----|-----------|
+| `defaultProvider` / `defaultModel` | `llamacpp` / `PI_MODEL` | 指定が無いと pi は auth が設定済みのモデルから自前の優先順で選ぶ。モデルを足したときに選択が変わらないよう決め打ちする |
+| `defaultThinkingLevel` | `off` | `reasoning: false` と対 |
+| `compaction.reserveTokens` | `PI_OUT` | 自動 compact のために空けておく分。`PI_CTX - PI_OUT` がプロンプト予算になる（他 2 つと同じ関係） |
+| `httpIdleTimeoutMs` | `1800000` | HTTP の無進捗タイムアウト（既定 5 分）。ローカル推論は prompt 処理だけで超えることがある |
+| `retry.provider.timeoutMs` | `1800000` | 1 リクエスト全体の上限。`httpIdleTimeoutMs` とは別物なので両方要る |
+| `enableInstallTelemetry` | `false` | インストール/更新時の匿名 ping を止める |
+
+さらに compose 側で `PI_OFFLINE=1` を渡し、起動時のバージョン確認・パッケージ更新確認・telemetry を止めている
+（egress を絞った構成では、届かない先への接続がタイムアウトまで待たされるだけなので）。
+
+> Claude Code と違い `agent.sh` は `--model` を渡さない。`pi install ...` のようなサブコマンドがあるため。
+> 一時的に変えたいときは `./agent.sh <p> pi --model llamacpp/<model>`、恒久的には `PI_MODEL` を変えて
+> `./agent.sh <p> up`。
+
+> `models.json` は毎起動で丸ごと作り直す。reasoning モデルを使うなど中身を変えたいときは
+> `scripts/entrypoint.sh` の jq ブロックを編集して `./agent.sh <p> up`。
+> pi 自身が書く `auth.json` / `trust.json` / `models-store.json` / `sessions/` は触らないので消えない。
+
+> プロジェクト固有の設定は `/workspace/.pi/settings.json`（＝プロジェクト直下）に置くとグローバル設定に
+> マージされる。ただし pi は `.pi/` 配下の設定・拡張の読み込み前に **信頼するか確認する**
+> （`~/.pi/agent/trust.json` に記録。非対話モードでは既定で読み込まない）。
+
 ## 言語(flavor)の選択
 
-`Dockerfile` は共通土台 `base`（Claude Code + egress 制御）を各言語ステージが継承する
+`Dockerfile` は共通土台 `base`（3 つのエージェント CLI + egress 制御）を各言語ステージが継承する
 マルチステージ構成。`project-configs/<project>.env` の `FLAVOR` で使うステージを選ぶ。
 
 | FLAVOR | 中身 |
@@ -134,11 +192,13 @@ vi project-configs/myapp.env        # WORKSPACE と ALLOWED_DOMAINS を編集
 ./agent.sh myapp run          # env の AGENT に従う（既定: claude）
 ./agent.sh myapp claude       # Claude Code を明示
 ./agent.sh myapp opencode     # OpenCode を明示
+./agent.sh myapp pi           # pi を明示
 
 # 全コマンドを自動承認（Dangerous モード）
 ./agent.sh myapp yolo         # AGENT に従う
 ./agent.sh myapp cc           # = claude --dangerously-skip-permissions
 ./agent.sh myapp oc           # = opencode --auto
+                              # pi は承認プロンプト自体が無いので専用アクションは無し
 
 # 追加の引数はそのまま CLI に渡る
 ./agent.sh myapp claude --resume
@@ -159,7 +219,7 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 
 ### 自動 up について
 
-`up` 以外のアクション（`shell` / `run` / `yolo` / `claude` / `cc` / `opencode` / `oc`）は、
+`up` 以外のアクション（`shell` / `run` / `yolo` / `claude` / `cc` / `opencode` / `oc` / `pi`）は、
 コンテナが起動していなければ自動で `up -d --build --wait` してから実行する。
 ビルドはキャッシュが効くので、停止状態からでも数秒で立ち上がる。
 
@@ -173,7 +233,7 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 
 コンテナの書き込みレイヤは `stop`/`start` では残るが、**コンテナが作り直されると消える**
 （`./agent.sh <p> down`、および `up` は `--build` 付きなのでイメージや compose 設定が
-変わると再作成される）。永続するのは以下の4つだけ。
+変わると再作成される）。永続するのは以下の5つだけ。
 
 | パス | 実体 | 用途 |
 |------|------|------|
@@ -181,6 +241,7 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 | `/home/node/.claude` | 名前付きボリューム `claude-config` | Claude Code の設定・履歴 |
 | `/home/node/.local` | 名前付きボリューム `local-tools` | 実行時に入れたツール（`~/.local/bin` は `PATH` に入っている）。OpenCode のセッション履歴 `~/.local/share/opencode` もここ |
 | `/home/node/.config/opencode` | 名前付きボリューム `opencode-config` | OpenCode の設定と、実行時に npm から取るプロバイダ SDK |
+| `/home/node/.pi` | 名前付きボリューム `pi-config` | pi の設定（`models.json` / `settings.json`）・セッション履歴・`pi install` で入れたパッケージ |
 
 これ以外（`/usr/local/bin`、`~/.bashrc`、`~/.cache`、`/tmp` など）に入れたものは再作成で消える。
 
@@ -209,7 +270,7 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 
 ## パーミッション設定
 
-`entrypoint.sh` が起動時に両エージェントへ同じ方針を書き込む
+`entrypoint.sh` が起動時に Claude Code と OpenCode へ同じ方針を書き込む
 （Claude Code は `~/.claude/settings.json`、OpenCode は `~/.config/opencode/opencode.json`）。
 
 | 区分 | 対象 | 動作 |
@@ -223,6 +284,13 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 > OpenCode 側は「最後にマッチしたルールが勝つ」ので、`bash` の `deny` を `"*": "ask"` の後ろに置いている。
 
 制限なしで動かしたい場合は `./agent.sh <project> yolo`（`cc` / `oc`。上記「使い方」参照）。
+
+> **pi は対象外**。pi は承認プロンプト・deny リストの仕組みを持たず、read/bash/edit/write を
+> 確認なしで実行する（「隔離はコンテナや VM の仕事であって、エージェント内の部分的な制限は
+> 境界を誤解させる」という設計方針）。pi を使うときの安全側の境界は
+> **このコンテナ（bind mount した `WORKSPACE` だけ・egress ホワイトリスト）だけ**になる。
+> それで足りない場合は `./agent.sh <p> pi --exclude-tools bash` のようにツール自体を外すか、
+> 承認が要る用途では Claude Code / OpenCode を使う。
 
 ## ネットワーク遮断の挙動
 
@@ -270,5 +338,6 @@ socat は手動起動だと WSL 再起動で消えるので、常用するなら
 ## ライセンス
 - Claude Code: Anthropic 公式 CLI（商用ポリシーは Anthropic の利用規約に従う）
 - OpenCode: MIT
+- pi (@earendil-works/pi-coding-agent): MIT
 - llama.cpp: MIT
 - ベースイメージ node:bookworm / 同梱ツール(iptables, ipset, jq, ripgrep 等): いずれも商用利用可（GPL系を含むがリンクではなく実行バイナリ利用のため通常問題なし）
