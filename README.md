@@ -55,6 +55,7 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 
 ```ini
 AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode | pi）
+# LLAMA_API_KEY=      # llama-server が --api-key 付きのときの鍵。空でよい（後述）
 CLAUDE_CTX=131072     # llama-server の --ctx-size に合わせる
 CLAUDE_OUT=32000      # Claude Code の毎リクエスト max_tokens 上限
 # OPENCODE_MODEL=     # 空なら CLAUDE_MODEL を使う
@@ -65,6 +66,28 @@ PI_CTX=131072         # llama-server の --ctx-size に合わせる
 PI_OUT=32000          # 毎リクエストの max_tokens 兼 compaction.reserveTokens
 ```
 
+### llama-server の API キー
+
+`llama-server` を `--api-key <key>` 付きで動かしている場合は、`project-configs/<project>.env` に
+`LLAMA_API_KEY` を書く。3 つのエージェント全部に同じ鍵が渡る。
+
+```ini
+LLAMA_API_KEY=sk-your-key
+```
+
+| エージェント | 渡り先 |
+|---|---|
+| Claude Code | `settings.json` の `ANTHROPIC_AUTH_TOKEN` |
+| OpenCode | `opencode.json` の `provider.llamacpp.options.apiKey` |
+| pi | `models.json` の `providers.llamacpp.apiKey` |
+
+認証なしの llama-server なら空のままでよい。その場合 entrypoint が `llamacpp-local` という
+ダミー値を入れる（空文字だと CLI / SDK が「認証未設定」とみなして落ちたり、pi のように
+モデルを候補から外したりするため）。
+
+`LLAMA_API_KEY` を書き換えたら `./agent.sh <p> up` でコンテナを作り直す（設定は毎起動で
+再生成される）。実行中コンテナとのズレは `agent.sh` が警告するが、鍵そのものは表示しない。
+
 ### Claude Code 側の設定
 
 entrypoint が毎起動で `~/.claude/settings.json` の `env` ブロックを生成する。
@@ -73,7 +96,7 @@ Claude Code は本家 API（複数モデル・巨大 context・thinking / prompt
 
 | 区分 | キー | なぜ要るか |
 |------|------|-----------|
-| 接続 | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` | llama-server の Anthropic 互換の口に向ける。トークンはダミー |
+| 接続 | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` | llama-server の Anthropic 互換の口に向ける。トークンは `LLAMA_API_KEY`（空ならダミー） |
 | モデル解決 | `ANTHROPIC_MODEL` | 既定モデル。コンテナ内で直に `claude` を叩いたときに効く（`agent.sh` は `--model` も渡す） |
 | モデル解決 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | **haiku エイリアスと「バックグラウンド処理」の解決先**。会話要約などが裏で走るので、向けておかないと存在しない `claude-haiku-...` を要求してしまう |
 | モデル解決 | `ANTHROPIC_DEFAULT_OPUS_MODEL` / `_SONNET_MODEL` / `_FABLE_MODEL` | `/model` のエイリアスをすべてローカルモデルに寄せる |
@@ -129,7 +152,7 @@ OpenCode はグローバル設定とプロジェクト設定をマージし、�
 | キー | 値 | なぜ要るか |
 |------|----|-----------|
 | `baseUrl` / `api` | `http://host:port/v1` / `openai-completions` | llama-server の OpenAI 互換の口に向ける |
-| `apiKey` | `llamacpp-local`（ダミー） | pi は「認証が設定されていないモデル」を `/model` の候補から外すので、空にできない |
+| `apiKey` | `LLAMA_API_KEY`（空ならダミー） | pi は「認証が設定されていないモデル」を `/model` の候補から外すので、空にできない |
 | `contextWindow` / `maxTokens` | `PI_CTX` / `PI_OUT` | 未知のモデルの既定は 128K / 16K。実サイズを教えないと compact の閾値がズレる |
 | `reasoning: false` | — | Claude Code 側の `MAX_THINKING_TOKENS=0` と同じ方針。thinking パラメータを送らない |
 | `compat.supportsDeveloperRole: false` | — | system プロンプトを `developer` ロールではなく `system` ロールで送る（llama-server 向け） |

@@ -23,8 +23,11 @@ fi
 LLAMA_HOST="${LLAMA_HOST:-host.docker.internal}"
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 export ANTHROPIC_BASE_URL="http://${LLAMA_HOST}:${LLAMA_PORT}"
-# ローカルサーバなのでトークンはダミーで良い（空だと CLI が怒る）
-export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-llamacpp-local}"
+# llama-server が --api-key 付きで動いている場合に渡す鍵。3 エージェント共通。
+# 認証なしのサーバでも、空文字だと CLI/SDK 側が認証未設定とみなして怒る
+# （pi は認証の無いモデルを /model の候補から外す）ので、未指定ならダミーを入れる。
+LLAMA_API_KEY="${LLAMA_API_KEY:-llamacpp-local}"
+export ANTHROPIC_AUTH_TOKEN="$LLAMA_API_KEY"
 # 実 API キーが環境に残っていると誤送信するので明示的に消す
 unset ANTHROPIC_API_KEY || true
 
@@ -138,6 +141,7 @@ OPENCODE_CONF="$HOME/.config/opencode/opencode.json"
 tmp="$(mktemp)"
 jq -n \
   --arg base  "http://${LLAMA_HOST}:${LLAMA_PORT}/v1" \
+  --arg key   "$LLAMA_API_KEY" \
   --arg model "$OPENCODE_MODEL" \
   --argjson ctx "$OPENCODE_CTX" \
   --argjson out "$OPENCODE_OUT" '
@@ -150,8 +154,7 @@ jq -n \
       name: "llama-server (local)",
       options: {
         baseURL: $base,
-        # ローカルサーバなのでダミーで良い（未設定だと SDK が認証を求めることがある）
-        apiKey: "llamacpp-local"
+        apiKey: $key
       },
       models: {
         ($model): { name: $model, limit: { context: $ctx, output: $out } }
@@ -192,6 +195,7 @@ PI_MODELS="$HOME/.pi/agent/models.json"
 tmp="$(mktemp)"
 jq -n \
   --arg base  "http://${LLAMA_HOST}:${LLAMA_PORT}/v1" \
+  --arg key   "$LLAMA_API_KEY" \
   --arg model "$PI_MODEL" \
   --argjson ctx "$PI_CTX" \
   --argjson out "$PI_OUT" '
@@ -200,9 +204,7 @@ jq -n \
     llamacpp: {
       baseUrl: $base,
       api: "openai-completions",
-      # ローカルサーバなのでダミーで良い。ただし pi は「認証が設定されていないモデル」を
-      # /model の候補から外すので、空にはしないこと。
-      apiKey: "llamacpp-local",
+      apiKey: $key,
       # llama-server が解さない／要らない OpenAI 拡張を送らないための互換フラグ。
       compat: {
         # system プロンプトを developer ロールではなく system ロールで送る

@@ -78,6 +78,7 @@ warn_env_drift() {
   for spec in \
     LLAMA_HOST=host.docker.internal \
     LLAMA_PORT=8080 \
+    LLAMA_API_KEY= \
     CLAUDE_MODEL=local-model \
     CLAUDE_CTX=131072 \
     CLAUDE_OUT=32000 \
@@ -95,7 +96,13 @@ warn_env_drift() {
     var="${spec%%=*}"
     want="${!var:-${spec#*=}}"                            # env ファイル側（compose と同じ既定値で補完）
     have="$(sed -n "s/^${var}=//p" <<<"$cenv")"           # コンテナ側
-    [ "$have" = "$want" ] || drift+="  ${var}: コンテナ='${have}' / env='${want}'"$'\n'
+    [ "$have" = "$want" ] && continue
+    # 鍵そのものは端末に出さない（ズレていることだけ伝える）
+    if [ "$var" = LLAMA_API_KEY ]; then
+      drift+="  ${var}: コンテナ側と env の値が違います"$'\n'
+    else
+      drift+="  ${var}: コンテナ='${have}' / env='${want}'"$'\n'
+    fi
   done
 
   [ -z "$drift" ] && return 0
