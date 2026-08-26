@@ -31,6 +31,19 @@ export ANTHROPIC_AUTH_TOKEN="$LLAMA_API_KEY"
 # 実 API キーが環境に残っていると誤送信するので明示的に消す
 unset ANTHROPIC_API_KEY || true
 
+# llama-server が VLM（--mmproj 付き）で動いているかどうか。OpenCode / pi は
+# 「モデルが画像入力に対応している」ことを設定で宣言しないと、画像を送る経路自体を
+# 塞ぐ（pi の read は "model does not support images" と書いて画像を捨て、
+# OpenCode は添付を受け付けない）。自動判定はサーバが起動済みである前提になるので
+# env で明示させる。Claude Code は Anthropic 互換のリクエストに画像をそのまま
+# 載せるだけなので、この値は使わない。
+LLAMA_VISION="${LLAMA_VISION:-1}"
+case "$LLAMA_VISION" in
+    0|1) ;;
+    *) echo "[entrypoint] LLAMA_VISION must be 0 or 1 (got: '${LLAMA_VISION}')" >&2; exit 1 ;;
+esac
+if [ "$LLAMA_VISION" = "1" ]; then VISION_JSON=true; else VISION_JSON=false; fi
+
 CLAUDE_MODEL="${CLAUDE_MODEL:-local-model}"
 # Claude Code に伝えるモデルの context/output 上限。OPENCODE_CTX/OUT と同じ役割。
 # CTX は llama-server の --ctx-size に合わせる。OUT は毎リクエストの max_tokens 上限で、
@@ -144,7 +157,8 @@ jq -n \
   --arg key   "$LLAMA_API_KEY" \
   --arg model "$OPENCODE_MODEL" \
   --argjson ctx "$OPENCODE_CTX" \
-  --argjson out "$OPENCODE_OUT" '
+  --argjson out "$OPENCODE_OUT" \
+  --argjson vision "$VISION_JSON" '
 {
   "$schema": "https://opencode.ai/config.json",
   autoupdate: false,
@@ -157,7 +171,18 @@ jq -n \
         apiKey: $key
       },
       models: {
-        ($model): { name: $model, limit: { context: $ctx, output: $out } }
+        ($model): {
+          name: $model,
+          limit: { context: $ctx, output: $out },
+          # models.dev のカタログに無いモデルなので、能力は全部こちらで宣言する。
+          # attachment は添付 UI と read の画像返却、modalities.input は
+          # リクエストに画像パートを載せてよいかの判定に使われる（既定はどちらも false）。
+          attachment: $vision,
+          modalities: {
+            input: (if $vision then ["text", "image"] else ["text"] end),
+            output: ["text"]
+          }
+        }
       }
     }
   },
@@ -198,7 +223,8 @@ jq -n \
   --arg key   "$LLAMA_API_KEY" \
   --arg model "$PI_MODEL" \
   --argjson ctx "$PI_CTX" \
-  --argjson out "$PI_OUT" '
+  --argjson out "$PI_OUT" \
+  --argjson vision "$VISION_JSON" '
 {
   providers: {
     llamacpp: {
@@ -222,7 +248,9 @@ jq -n \
           name: "llama-server (local)",
           # Claude Code 側の MAX_THINKING_TOKENS=0 と同じ方針で thinking は使わない
           reasoning: false,
-          input: ["text"],
+          # 画像を受け付けるか。text だけだと read が画像を捨て、
+          # 「Current model does not support images」という注記に差し替えてしまう。
+          input: (if $vision then ["text", "image"] else ["text"] end),
           contextWindow: $ctx,
           maxTokens: $out,
           # ローカルモデルは課金されないので全部 0（pi のコスト表示が 0 になる）
@@ -264,8 +292,8 @@ jq --arg model "$PI_MODEL" \
 echo "[entrypoint] wrote pi models.json / synced settings.json (provider llamacpp -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1)"
 
 echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL}, ctx: ${CLAUDE_CTX}, out: ${CLAUDE_OUT})"
-echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL}, ctx: ${OPENCODE_CTX}, out: ${OPENCODE_OUT})"
-echo "[entrypoint] pi          -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${PI_MODEL}, ctx: ${PI_CTX}, out: ${PI_OUT})"
+echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL}, ctx: ${OPENCODE_CTX}, out: ${OPENCODE_OUT}, vision: ${LLAMA_VISION})"
+echo "[entrypoint] pi          -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${PI_MODEL}, ctx: ${PI_CTX}, out: ${PI_OUT}, vision: ${LLAMA_VISION})"
 echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
 

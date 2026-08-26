@@ -48,6 +48,9 @@ services:
       # llama-server が --api-key 付きで動いているときに渡す鍵（3 エージェント共通）。
       # 空なら entrypoint がダミーを入れる。
       LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      # llama-server が VLM(--mmproj 付き)かどうか。OpenCode / pi は「モデルが画像を
+      # 受け付ける」と宣言しないと画像を送らない。テキスト専用モデルなら 0 にする。
+      LLAMA_VISION: ${LLAMA_VISION:-1}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-local-model}
       # Claude Code に伝えるモデルの context/output 上限（llama-server の実際の
       # --ctx-size に合わせる）。entrypoint が settings.json に書く。

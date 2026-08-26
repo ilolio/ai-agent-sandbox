@@ -79,6 +79,7 @@ warn_env_drift() {
     LLAMA_HOST=host.docker.internal \
     LLAMA_PORT=8080 \
     LLAMA_API_KEY= \
+    LLAMA_VISION=1 \
     CLAUDE_MODEL=local-model \
     CLAUDE_CTX=131072 \
     CLAUDE_OUT=32000 \

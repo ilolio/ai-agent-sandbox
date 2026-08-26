@@ -56,6 +56,7 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 ```ini
 AGENT=opencode        # run / yolo が使う既定エージェント（claude | opencode | pi）
 # LLAMA_API_KEY=      # llama-server が --api-key 付きのときの鍵。空でよい（後述）
+LLAMA_VISION=1        # llama-server が VLM（--mmproj 付き）かどうか。既定 1（後述）
 CLAUDE_CTX=131072     # llama-server の --ctx-size に合わせる
 CLAUDE_OUT=32000      # Claude Code の毎リクエスト max_tokens 上限
 # OPENCODE_MODEL=     # 空なら CLAUDE_MODEL を使う
@@ -87,6 +88,36 @@ LLAMA_API_KEY=sk-your-key
 
 `LLAMA_API_KEY` を書き換えたら `./agent.sh <p> up` でコンテナを作り直す（設定は毎起動で
 再生成される）。実行中コンテナとのズレは `agent.sh` が警告するが、鍵そのものは表示しない。
+
+### 画像入力（VLM）
+
+`LLAMA_VISION` は llama-server が VLM（`--mmproj` 付き）かどうかを表す。**既定は 1**。
+テキスト専用モデルを指しているプロジェクトだけ `project-configs/<project>.env` で 0 にする。
+
+```ini
+LLAMA_VISION=0
+```
+
+OpenCode と pi は**モデルカタログの「画像入力に対応している」という宣言を見て、画像を送るかどうかを
+決める**。llamacpp プロバイダのモデルはカタログ（models.dev / pi の同梱カタログ）に無いので、
+宣言しない限り「非対応」扱いになる。その状態だとサーバ側が VLM でもエージェントは画像を送らない
+——エラーにもならず、単に見えていないように振る舞う。これが `LLAMA_VISION` の役割。
+
+| エージェント | 渡り先 | 0 のときの挙動 |
+|---|---|---|
+| Claude Code | （使わない） | 画像はそのままリクエストに載る |
+| OpenCode | `opencode.json` の `attachment` と `modalities.input` | 添付・画像パートを受け付けない |
+| pi | `models.json` の `input` | `read` が画像を捨て「このモデルは画像に対応していない」という注記に差し替える |
+
+反映は `./agent.sh <p> up`。効いているかは起動ログの `vision: 1` と、
+`./agent.sh <p> shell` から次で確認できる。
+
+```
+pi --list-models          # images 列が yes
+opencode models llamacpp --verbose | grep -A10 capabilities
+```
+
+テキスト専用モデルに 1 のままだと、画像付きリクエストを llama-server 側が弾く。
 
 ### Claude Code 側の設定
 
@@ -154,6 +185,7 @@ OpenCode はグローバル設定とプロジェクト設定をマージし、�
 | `baseUrl` / `api` | `http://host:port/v1` / `openai-completions` | llama-server の OpenAI 互換の口に向ける |
 | `apiKey` | `LLAMA_API_KEY`（空ならダミー） | pi は「認証が設定されていないモデル」を `/model` の候補から外すので、空にできない |
 | `contextWindow` / `maxTokens` | `PI_CTX` / `PI_OUT` | 未知のモデルの既定は 128K / 16K。実サイズを教えないと compact の閾値がズレる |
+| `input` | `LLAMA_VISION` に応じて `["text"]` / `["text","image"]` | 画像を受け付けるか。`text` だけだと `read` が画像を捨てる |
 | `reasoning: false` | — | Claude Code 側の `MAX_THINKING_TOKENS=0` と同じ方針。thinking パラメータを送らない |
 | `compat.supportsDeveloperRole: false` | — | system プロンプトを `developer` ロールではなく `system` ロールで送る（llama-server 向け） |
 | `compat.supportsReasoningEffort: false` | — | `reasoning_effort` を送らない |
