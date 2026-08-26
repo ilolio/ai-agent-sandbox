@@ -135,7 +135,8 @@ Claude Code は本家 API（複数モデル・巨大 context・thinking / prompt
 | モデル解決 | `ANTHROPIC_CUSTOM_MODEL_OPTION`(+`_NAME`) | `/model` のピッカーに `llama-server (local)` として実名で出す |
 | context | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = `CLAUDE_CTX` | 未知のモデル ID だと Claude Code は独自に仮定した context 幅（値は非公開）で compact する。実サイズを教えないと自動 compact の閾値が `--ctx-size` とズレる |
 | context | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` = `CLAUDE_OUT` | 毎リクエストの max_tokens。大きいほど自動 compact が早まる（プロンプト予算が減る） |
-| 機能オフ | `MAX_THINKING_TOKENS=0` / `DISABLE_INTERLEAVED_THINKING` / `DISABLE_PROMPT_CACHING` | llama-server が解さない thinking パラメータ・beta ヘッダ・`cache_control` を送らない |
+| 機能オフ | `MAX_THINKING_TOKENS=0` / `DISABLE_INTERLEAVED_THINKING` | llama-server が解さない thinking パラメータと beta ヘッダを送らない |
+| キャッシュ | `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | 有効だと system プロンプトの先頭に `x-anthropic-billing-header: cc_version=<version>.<hash>; ...` が入る。`<hash>` は会話の最初のユーザ発言から作られるので会話ごとに変わり、先頭トークンから食い違って 6KB 超の system プロンプトごと毎セッション再処理になる。0 にすると定数プレフィクスになり llama-server の KV キャッシュがセッションを跨いで効く |
 | タイムアウト | `API_TIMEOUT_MS` / `CLAUDE_CODE_STREAM_IDLE_TIMEOUT_MS` / `API_FORCE_IDLE_TIMEOUT=0` | ローカル推論は遅い。既定（1 リクエスト 10 分 / 無進捗 5 分）だと prompt 処理中に切られる |
 | オフライン | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` / `DISABLE_AUTOUPDATER` / `DISABLE_TELEMETRY` / `DISABLE_ERROR_REPORTING` | telemetry・エラー報告・自動更新・リリースノート取得を止める。egress を絞っている構成では無駄に叩かせない |
 | オフライン | `DISABLE_COST_WARNINGS` | ローカルモデルは課金されないのでコスト警告が無意味 |

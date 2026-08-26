@@ -102,8 +102,15 @@ jq --arg base  "$ANTHROPIC_BASE_URL" \
     MAX_THINKING_TOKENS: "0",
     # interleaved thinking の beta ヘッダを送らない
     DISABLE_INTERLEAVED_THINKING: "1",
-    # cache_control ブロックを送らない（Anthropic のプロンプトキャッシュ用）
-    DISABLE_PROMPT_CACHING: "1",
+
+    # --- llama-server の prefix キャッシュを効かせる ---
+    # 有効だと Claude Code は system プロンプトの先頭に
+    # "x-anthropic-billing-header: cc_version=<version>.<hash>; ..." というブロックを差し込む。
+    # <hash> は「その会話の最初のユーザ発言」から作られるので、会話ごとに変わる。
+    # つまり先頭トークンから食い違い、6KB 超ある system プロンプト本体まで含めて
+    # 毎セッション再処理になる。0 にすると先頭ブロックが消えて定数プレフィクスになり、
+    # セッションを跨いで KV キャッシュを再利用できる。
+    CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
 
     # --- ローカル推論は遅いのでタイムアウトを伸ばす ---
     API_TIMEOUT_MS: "1800000",                   # 1 リクエストの上限 30 分（既定 10 分）
@@ -114,7 +121,6 @@ jq --arg base  "$ANTHROPIC_BASE_URL" \
     # telemetry / エラー報告 / 自動更新チェック / リリースノート取得をまとめて止める
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     DISABLE_AUTOUPDATER: "1",
-    CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
     DISABLE_TELEMETRY: "1",
     DISABLE_ERROR_REPORTING: "1",
     # ローカルモデルは課金されないのでコスト警告は無意味
