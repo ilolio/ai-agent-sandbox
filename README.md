@@ -254,9 +254,12 @@ websearch "query" --json     # スクリプトで使う用
 ### 設定
 
 ```ini
-WEB_SEARCH=1             # 0 で完全に無効（MCP 登録も firewall の穴も作らない）
+WEB_SEARCH=1             # 0 で無効（MCP 登録をしない）
 WEB_SEARCH_RESULTS=5     # 既定の件数（ツール引数が優先）
 WEB_SEARCH_REGION=wt-wt  # DuckDuckGo の地域コード。日本語の結果を優先したいなら jp-jp
+
+# 検索先は firewall のホワイトリストにも書くこと（後述）
+ALLOWED_DOMAINS=...,lite.duckduckgo.com,html.duckduckgo.com
 ```
 
 反映は `./agent.sh <p> up`（設定は毎起動で作り直される）。
@@ -268,12 +271,15 @@ WEB_SEARCH_REGION=wt-wt  # DuckDuckGo の地域コード。日本語の結果を
   公開 API が無いので HTML の構造に依存する = **DuckDuckGo 側の変更で壊れうる**。
   壊れたら直すのは `scripts/websearch.mjs` の `parseResults()`。
 - 短時間に叩きすぎると bot 判定されて 0 件が返る。そのときは少し待つ。
-- egress は `WEB_SEARCH=1` のとき duckduckgo のホストを自動で通す（`ALLOWED_DOMAINS` に
-  書かなくてよい）。ただし **検索結果の URL を `web_fetch` / `WebFetch` で開けるのは
-  `ALLOWED_DOMAINS` に入っているドメインだけ**。よく参照する先はホワイトリストに足すこと。
-  塞がれている先を開こうとしたときは、`cannot connect to <host> (UND_ERR_CONNECT_TIMEOUT).
-  This sandbox only allows the hosts listed in ALLOWED_DOMAINS ...` というエラーが返る
-  （iptables は REJECT ではなく DROP なので、ブロックは接続タイムアウトとして現れる）。
+- **検索先も `ALLOWED_DOMAINS` に自分で書く**（opt-in）。`WEB_SEARCH=1` にしただけで
+  firewall に穴が開くと、env を読んだだけでは何が通るのか分からなくなるため。必要なのは
+  `lite.duckduckgo.com,html.duckduckgo.com` の 2 つ。書き忘れた状態で `WEB_SEARCH=1` に
+  していると、entrypoint が起動時に警告する。
+- 同じ理由で **検索結果の URL を `web_fetch` / `WebFetch` で開けるのも `ALLOWED_DOMAINS`
+  に入っているドメインだけ**。よく参照する先はホワイトリストに足すこと。塞がれている先は
+  `cannot connect to <host> (UND_ERR_CONNECT_TIMEOUT). This sandbox only allows the hosts
+  listed in ALLOWED_DOMAINS ...` というエラーになる（iptables は REJECT ではなく DROP なので、
+  ブロックは接続タイムアウトとして現れる）。
 - ホワイトリストは起動時の DNS 解決結果(IP)を固定する方式なので、DuckDuckGo 側の IP が
   変わると急に検索が通らなくなることがある。`./agent.sh <p> up` で作り直せば再解決される。
 - Claude Code の登録先 `~/.claude.json` は永続ボリュームの外（`~/.claude` とは別のファイル）。
@@ -418,10 +424,10 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 ## ネットワーク遮断の挙動
 
 - `LLAMA_HOST:LLAMA_PORT`（llama-server）は常に許可。
-- `WEB_SEARCH=1` のとき duckduckgo のホスト（`lite` / `html` / `links` / 本体）も許可。
 - `ALLOWED_DOMAINS` に書いたドメインのみ追加で許可。
 - 完全遮断（ローカル LLM のみ・パッケージ取得もさせない）にしたいときは
-  `ALLOWED_DOMAINS=` を空にする（検索も止めるなら `WEB_SEARCH=0` も）。
+  `ALLOWED_DOMAINS=` を空にする。Web 検索もこれで落ちるので、警告を出さないよう
+  `WEB_SEARCH=0` も併せて設定する。
 - DNS(53) は名前解決のため許可。それ以外の OUTPUT は DROP。
 
 ### 注意

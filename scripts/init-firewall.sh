@@ -7,11 +7,6 @@
 set -euo pipefail
 
 ALLOWED_DOMAINS="${ALLOWED_DOMAINS:-}"
-# Web 検索(DuckDuckGo)を使うなら、その口は ALLOWED_DOMAINS に書かなくても通す
-# （llama-server と同じ「この構成に必要な宛先」扱い）。ホスト名は websearch.mjs の
-# ENDPOINTS と揃えること。duckduckgo.com / links.* はリダイレクタを開くとき用。
-WEB_SEARCH="${WEB_SEARCH:-1}"
-SEARCH_DOMAINS="lite.duckduckgo.com,html.duckduckgo.com,duckduckgo.com,links.duckduckgo.com"
 # ホスト側 llama-server。Docker Desktop なら host.docker.internal、
 # Linux なら compose の extra_hosts で host-gateway を割り当てる。
 LLAMA_HOST="${LLAMA_HOST:-host.docker.internal}"
@@ -54,14 +49,11 @@ if [ -n "${GW:-}" ]; then
 fi
 
 # --- ホワイトリストドメインを ipset でまとめる ---
+# Web 検索(DuckDuckGo)の口もここに書いてもらう（暗黙に開けない）。
+# 書き忘れは entrypoint が起動時に警告する。
 ipset create allowed hash:ip -exist
-
-# カンマ区切りのドメイン列を名前解決して ipset に入れる
-add_domains() {
-    local list="${1:-}" d ip
-    local -a DOMS
-    [ -z "$list" ] && return 0
-    IFS=',' read -ra DOMS <<< "$list"
+if [ -n "$ALLOWED_DOMAINS" ]; then
+    IFS=',' read -ra DOMS <<< "$ALLOWED_DOMAINS"
     for d in "${DOMS[@]}"; do
         d="$(echo "$d" | xargs)"   # trim
         [ -z "$d" ] && continue
@@ -70,11 +62,6 @@ add_domains() {
             echo "[firewall] allow $d -> $ip"
         done
     done
-}
-
-add_domains "$ALLOWED_DOMAINS"
-if [ "$WEB_SEARCH" = "1" ]; then
-    add_domains "$SEARCH_DOMAINS"
 fi
 iptables -A OUTPUT -m set --match-set allowed dst -j ACCEPT
 

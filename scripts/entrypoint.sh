@@ -49,6 +49,8 @@ if [ "$LLAMA_VISION" = "1" ]; then VISION_JSON=true; else VISION_JSON=false; fi
 # server tool なので、ANTHROPIC_BASE_URL を llama-server に向けた時点で使えない
 # （OpenCode / pi はそもそも Web 検索ツールを持たない）。代わりに DuckDuckGo を叩く
 # websearch を MCP サーバとして登録する。CLI としても使える（pi や bash から）。
+# 検索先(duckduckgo)は ALLOWED_DOMAINS に自分で書く。firewall に暗黙の穴を作らない
+# ため。書き忘れると検索が接続タイムアウトで落ちるだけなので、起動時に警告する。
 WEB_SEARCH="${WEB_SEARCH:-1}"
 case "$WEB_SEARCH" in
     0|1) ;;
@@ -176,6 +178,16 @@ if [ "$WEB_SEARCH" = "1" ]; then
         }
       })' "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
     echo "[entrypoint] registered MCP server 'websearch' (duckduckgo) for Claude Code"
+    if [ "${ENABLE_FIREWALL:-1}" = "1" ]; then
+        case "${ALLOWED_DOMAINS:-}" in
+            *duckduckgo.com*) ;;
+            *)
+                echo "[entrypoint] warning: WEB_SEARCH=1 ですが ALLOWED_DOMAINS に duckduckgo がありません。" >&2
+                echo "[entrypoint]          このままでは検索が firewall で落ちます（接続タイムアウト）。" >&2
+                echo "[entrypoint]          ALLOWED_DOMAINS に lite.duckduckgo.com,html.duckduckgo.com を足してください。" >&2
+                ;;
+        esac
+    fi
 else
     jq 'if .mcpServers then .mcpServers |= del(.websearch) else . end' \
         "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"

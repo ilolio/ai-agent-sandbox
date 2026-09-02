@@ -79,7 +79,8 @@ services:
       PI_OFFLINE: "1"
       # ★Web 検索(DuckDuckGo)。0 で無効。
       #   有効なら entrypoint が websearch を MCP サーバとして Claude Code / OpenCode に
-      #   登録し、firewall が duckduckgo のホストを自動でホワイトリストに足す。
+      #   登録する。検索先(duckduckgo)は ALLOWED_DOMAINS に自分で書くこと
+      #   （firewall に暗黙の穴を作らないため。書き忘れは起動時に警告が出る）。
       WEB_SEARCH: ${WEB_SEARCH:-1}
       # 既定の検索件数と DuckDuckGo の地域コード（wt-wt = 地域指定なし / jp-jp = 日本）。
       # `docker compose exec` は entrypoint を通らないので、MCP サーバの子プロセスに

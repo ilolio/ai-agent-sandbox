@@ -61,7 +61,7 @@ RUN printf '#!/bin/sh\nexec node /usr/local/lib/websearch.mjs "$@"\n' > /usr/loc
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY scripts/entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
-    && { echo 'Defaults env_keep += "LLAMA_HOST LLAMA_PORT ALLOWED_DOMAINS WEB_SEARCH"'; \
+    && { echo 'Defaults env_keep += "LLAMA_HOST LLAMA_PORT ALLOWED_DOMAINS"'; \
          echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh'; } > /etc/sudoers.d/firewall \
     && chmod 0440 /etc/sudoers.d/firewall
 
