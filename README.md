@@ -30,6 +30,7 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 | Claude Code を llama.cpp で | entrypoint が `~/.claude/settings.json` に `ANTHROPIC_BASE_URL` とローカルモデル前提の設定（エイリアス解決先・context 上限・thinking / caching オフ等）を生成 |
 | OpenCode を llama.cpp で | entrypoint が `~/.config/opencode/opencode.json` に OpenAI 互換プロバイダ `llamacpp` を生成 |
 | pi を llama.cpp で | entrypoint が `~/.pi/agent/models.json` に OpenAI 互換プロバイダ `llamacpp` を、`settings.json` に既定モデル等を生成 |
+| Web 検索を使う | 組み込みの WebSearch は llama-server では動かないので、DuckDuckGo を叩く `websearch` を同梱し、MCP サーバ / CLI として生やす |
 | エージェントを選ぶ | 3 つともインストール済み。`AGENT` が既定値、`./agent.sh <p> claude\|opencode\|pi` で都度切替 |
 | egress をコンテナごとに制御 | 起動時 `init-firewall.sh` が iptables でホワイトリスト以外を drop |
 | 言語ごとにイメージを選択 | `Dockerfile` をマルチステージ化し、`FLAVOR` で build target を切替 |
@@ -65,6 +66,7 @@ OPENCODE_OUT=32000    # 毎リクエストの max_tokens。OpenCode 内部の上
 # PI_MODEL=           # 空なら CLAUDE_MODEL を使う
 PI_CTX=131072         # llama-server の --ctx-size に合わせる
 PI_OUT=32000          # 毎リクエストの max_tokens 兼 compaction.reserveTokens
+WEB_SEARCH=1          # DuckDuckGo 検索を生やす（既定 1・後述）。0 で無効
 ```
 
 ### llama-server の API キー
@@ -219,6 +221,66 @@ OpenCode はグローバル設定とプロジェクト設定をマージし、�
 > マージされる。ただし pi は `.pi/` 配下の設定・拡張の読み込み前に **信頼するか確認する**
 > （`~/.pi/agent/trust.json` に記録。非対話モードでは既定で読み込まない）。
 
+## Web 検索（DuckDuckGo）
+
+ローカルモデルだと **Claude Code の組み込み `WebSearch` は使えない**。あれは Anthropic の
+API サーバ側で実行される server tool で、`ANTHROPIC_BASE_URL` を llama-server に向けた
+時点で実行してくれる相手がいなくなる。OpenCode と pi はそもそも Web 検索ツールを持たない。
+
+そこで DuckDuckGo を叩く小さなツール `websearch`（`scripts/websearch.mjs`）を同梱して、
+起動時に 3 つのエージェント全部から使えるようにしている。**既定で有効**（`WEB_SEARCH=1`）。
+
+| エージェント | 生やし方 | モデルから見える名前 |
+|---|---|---|
+| Claude Code | `~/.claude.json` の `mcpServers.websearch`（ユーザスコープの MCP サーバ） | `mcp__websearch__web_search` / `mcp__websearch__web_fetch` |
+| OpenCode | `opencode.json` の `mcp.websearch`（local MCP） | `websearch_web_search` / `websearch_web_fetch` |
+| pi | MCP を持たない設計なので CLI として | bash から `websearch "query"` |
+
+ツールは 2 つ。
+
+| ツール | 何をするか |
+|---|---|
+| `web_search` | DuckDuckGo で検索し、タイトル・URL・スニペットを返す（`max_results` / `region` / `time_range`） |
+| `web_fetch` | URL を取得して本文テキストにして返す（検索結果を開く用） |
+
+同じものが CLI としても使える（`./agent.sh <p> shell` や pi の bash から）。
+
+```bash
+websearch "llama.cpp server anthropic api" -n 3
+websearch --fetch https://example.com/docs
+websearch "query" --json     # スクリプトで使う用
+```
+
+### 設定
+
+```ini
+WEB_SEARCH=1             # 0 で完全に無効（MCP 登録も firewall の穴も作らない）
+WEB_SEARCH_RESULTS=5     # 既定の件数（ツール引数が優先）
+WEB_SEARCH_REGION=wt-wt  # DuckDuckGo の地域コード。日本語の結果を優先したいなら jp-jp
+```
+
+反映は `./agent.sh <p> up`（設定は毎起動で作り直される）。
+
+### 実装と制約
+
+- **依存パッケージ無し**。Node の `fetch` で DuckDuckGo の HTML 版の口
+  （`lite.duckduckgo.com` → 駄目なら `html.duckduckgo.com`）を叩いて結果を抜き出している。
+  公開 API が無いので HTML の構造に依存する = **DuckDuckGo 側の変更で壊れうる**。
+  壊れたら直すのは `scripts/websearch.mjs` の `parseResults()`。
+- 短時間に叩きすぎると bot 判定されて 0 件が返る。そのときは少し待つ。
+- egress は `WEB_SEARCH=1` のとき duckduckgo のホストを自動で通す（`ALLOWED_DOMAINS` に
+  書かなくてよい）。ただし **検索結果の URL を `web_fetch` / `WebFetch` で開けるのは
+  `ALLOWED_DOMAINS` に入っているドメインだけ**。よく参照する先はホワイトリストに足すこと。
+- ホワイトリストは起動時の DNS 解決結果(IP)を固定する方式なので、DuckDuckGo 側の IP が
+  変わると急に検索が通らなくなることがある。`./agent.sh <p> up` で作り直せば再解決される。
+- Claude Code の登録先 `~/.claude.json` は永続ボリュームの外（`~/.claude` とは別のファイル）。
+  コンテナ再作成で消えるが、entrypoint が毎起動で書き直すので気にしなくてよい。
+- 組み込みの `WebSearch` は `settings.json` の `permissions.deny` に入れて**モデルから隠して
+  いる**（ツール名だけの deny は「候補から外す」意味になる）。使えないツールを選んで失敗
+  するのを防ぐため。一方 `WebFetch` は Claude Code 自身が取りに行くのでローカルモデルでも
+  動く。取得前に Anthropic へ投げるドメイン安全性チェックだけ `skipWebFetchPreflight` で
+  飛ばしてある（egress を絞っているとそこに届かず失敗するため）。
+
 ## 言語(flavor)の選択
 
 `Dockerfile` は共通土台 `base`（3 つのエージェント CLI + egress 制御）を各言語ステージが継承する
@@ -332,7 +394,9 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 | 区分 | 対象 | 動作 |
 |------|------|------|
 | `allow` | ファイルの読み書き（Read / Edit / Write） | 自動承認（プロンプトなし） |
+| `allow` | Web 検索（`websearch` の MCP ツール） | 自動承認（読み取り専用のため） |
 | `deny` | `git push --force` / `git push -f` / `git reset --hard` | 常にブロック |
+| `deny` | 組み込みの `WebSearch`（Claude Code のみ） | モデルに見せない（llama-server では実行できないため。上の「Web 検索」参照） |
 | それ以外 | Bash など | 都度確認 |
 
 > `deny` パターンはコマンド先頭からの前方一致。`git push origin --force`（`--force` が後置）など
@@ -351,9 +415,10 @@ cp env.example project-configs/other.env && vi project-configs/other.env
 ## ネットワーク遮断の挙動
 
 - `LLAMA_HOST:LLAMA_PORT`（llama-server）は常に許可。
+- `WEB_SEARCH=1` のとき duckduckgo のホスト（`lite` / `html` / `links` / 本体）も許可。
 - `ALLOWED_DOMAINS` に書いたドメインのみ追加で許可。
 - 完全遮断（ローカル LLM のみ・パッケージ取得もさせない）にしたいときは
-  `ALLOWED_DOMAINS=` を空にする。
+  `ALLOWED_DOMAINS=` を空にする（検索も止めるなら `WEB_SEARCH=0` も）。
 - DNS(53) は名前解決のため許可。それ以外の OUTPUT は DROP。
 
 ### 注意
@@ -395,5 +460,6 @@ socat は手動起動だと WSL 再起動で消えるので、常用するなら
 - Claude Code: Anthropic 公式 CLI（商用ポリシーは Anthropic の利用規約に従う）
 - OpenCode: MIT
 - pi (@earendil-works/pi-coding-agent): MIT
+- websearch（`scripts/websearch.mjs`）: 本リポジトリの自前実装。外部パッケージ非依存
 - llama.cpp: MIT
 - ベースイメージ node:bookworm / 同梱ツール(iptables, ipset, jq, ripgrep 等): いずれも商用利用可（GPL系を含むがリンクではなく実行バイナリ利用のため通常問題なし）

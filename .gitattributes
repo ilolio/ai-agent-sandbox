@@ -1,6 +1,7 @@
 # コンテナ内で実行するスクリプト/設定は必ず LF。
 # CRLF だと Linux で `bad interpreter` 等で壊れる。
 *.sh            text eol=lf
+*.mjs           text eol=lf
 Dockerfile      text eol=lf
 *.yml           text eol=lf
 .gitignore      text eol=lf

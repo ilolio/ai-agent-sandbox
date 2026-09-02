@@ -44,6 +44,18 @@ case "$LLAMA_VISION" in
 esac
 if [ "$LLAMA_VISION" = "1" ]; then VISION_JSON=true; else VISION_JSON=false; fi
 
+# Web 検索（DuckDuckGo）を各エージェントに生やすかどうか。既定 1。
+# Claude Code の組み込み WebSearch は Anthropic の API サーバ側で実行される
+# server tool なので、ANTHROPIC_BASE_URL を llama-server に向けた時点で使えない
+# （OpenCode / pi はそもそも Web 検索ツールを持たない）。代わりに DuckDuckGo を叩く
+# websearch を MCP サーバとして登録する。CLI としても使える（pi や bash から）。
+WEB_SEARCH="${WEB_SEARCH:-1}"
+case "$WEB_SEARCH" in
+    0|1) ;;
+    *) echo "[entrypoint] WEB_SEARCH must be 0 or 1 (got: '${WEB_SEARCH}')" >&2; exit 1 ;;
+esac
+if [ "$WEB_SEARCH" = "1" ]; then WEB_SEARCH_JSON=true; else WEB_SEARCH_JSON=false; fi
+
 CLAUDE_MODEL="${CLAUDE_MODEL:-local-model}"
 # Claude Code に伝えるモデルの context/output 上限。OPENCODE_CTX/OUT と同じ役割。
 # CTX は llama-server の --ctx-size に合わせる。OUT は毎リクエストの max_tokens 上限で、
@@ -67,7 +79,8 @@ jq --arg base  "$ANTHROPIC_BASE_URL" \
    --arg token "$ANTHROPIC_AUTH_TOKEN" \
    --arg model "$CLAUDE_MODEL" \
    --arg ctx   "$CLAUDE_CTX" \
-   --arg out   "$CLAUDE_OUT" '
+   --arg out   "$CLAUDE_OUT" \
+   --argjson websearch "$WEB_SEARCH_JSON" '
   .env = (.env // {}) + {
     ANTHROPIC_BASE_URL: $base,
     ANTHROPIC_AUTH_TOKEN: $token,
@@ -127,14 +140,47 @@ jq --arg base  "$ANTHROPIC_BASE_URL" \
     DISABLE_COST_WARNINGS: "1"
   } |
   .permissions = {
-    "allow": ["Read", "Edit", "Write"],
+    # websearch(MCP) は読み取り専用なので確認なしで通す。
+    # 名前は mcp__<サーバ名>__<ツール名>。サーバ名は下の .claude.json 側と揃える。
+    "allow": (["Read", "Edit", "Write"] +
+              (if $websearch then ["mcp__websearch__web_search", "mcp__websearch__web_fetch"] else [] end)),
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
-      "Bash(git reset --hard:*)"
+      "Bash(git reset --hard:*)",
+      # 組み込みの WebSearch は Anthropic の API サーバ側で実行される server tool で、
+      # llama-server には実行しようがない。ツール名だけの deny は「モデルに見せない」
+      # 意味になるので、使えないツールを候補から外せる（代わりに websearch を使わせる）。
+      "WebSearch"
     ]
-  }' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+  } |
+  # WebFetch は Claude Code 自身が取りに行くのでローカルモデルでも動くが、
+  # 取得前に Anthropic へドメインの安全性チェックを投げる。egress を絞った構成では
+  # そこに届かず失敗するので飛ばす。
+  .skipWebFetchPreflight = true' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
 echo "[entrypoint] synced settings.json (ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL})"
+
+# Claude Code の MCP サーバはユーザスコープ = ~/.claude.json の最上位 mcpServers に置く
+# （settings.json には書けない）。ここに書いたサーバは全プロジェクトで、承認プロンプト
+# なしに読み込まれる。他のキー（ログイン状態・プロジェクトごとの trust 等）は残す。
+CLAUDE_JSON="$HOME/.claude.json"
+[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+tmp="$(mktemp)"
+if [ "$WEB_SEARCH" = "1" ]; then
+    jq '
+      .mcpServers = ((.mcpServers // {}) + {
+        websearch: {
+          type: "stdio",
+          command: "websearch",
+          args: ["--mcp"]
+        }
+      })' "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
+    echo "[entrypoint] registered MCP server 'websearch' (duckduckgo) for Claude Code"
+else
+    jq 'if .mcpServers then .mcpServers |= del(.websearch) else . end' \
+        "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
+    echo "[entrypoint] web search disabled (WEB_SEARCH=0)"
+fi
 
 # --- 3) OpenCode を llama.cpp に向ける（OpenAI 互換エンドポイント = /v1）---
 # OpenCode は Anthropic 互換ではなく OpenAI 互換で喋るので、同じ llama-server の
@@ -164,7 +210,8 @@ jq -n \
   --arg model "$OPENCODE_MODEL" \
   --argjson ctx "$OPENCODE_CTX" \
   --argjson out "$OPENCODE_OUT" \
-  --argjson vision "$VISION_JSON" '
+  --argjson vision "$VISION_JSON" \
+  --argjson websearch "$WEB_SEARCH_JSON" '
 {
   "$schema": "https://opencode.ai/config.json",
   autoupdate: false,
@@ -193,12 +240,24 @@ jq -n \
     }
   },
   model: ("llamacpp/" + $model),
+  # Web 検索（Claude Code 側と同じ websearch を MCP サーバとして使う）。
+  # OpenCode の local MCP は command を配列で渡す。
+  mcp: (if $websearch then {
+    websearch: {
+      type: "local",
+      command: ["websearch", "--mcp"],
+      enabled: true
+    }
+  } else {} end),
   # Claude Code 側(settings.json)と同じ方針に揃える。
   # bash は「最後にマッチしたルールが勝つ」ので deny を後ろに置く。
   permission: {
     "*": "ask",
     read: "allow",
     edit: "allow",
+    # MCP のツールは <サーバ名>_<ツール名> という名前で出てくる。
+    # websearch_* は読み取り専用なので確認なしで通す。
+    "websearch_*": "allow",
     bash: {
       "*": "ask",
       "git push --force*": "deny",
@@ -300,6 +359,9 @@ echo "[entrypoint] wrote pi models.json / synced settings.json (provider llamacp
 echo "[entrypoint] Claude Code -> ${ANTHROPIC_BASE_URL}  (model: ${CLAUDE_MODEL}, ctx: ${CLAUDE_CTX}, out: ${CLAUDE_OUT})"
 echo "[entrypoint] OpenCode    -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${OPENCODE_MODEL}, ctx: ${OPENCODE_CTX}, out: ${OPENCODE_OUT}, vision: ${LLAMA_VISION})"
 echo "[entrypoint] pi          -> http://${LLAMA_HOST}:${LLAMA_PORT}/v1  (model: llamacpp/${PI_MODEL}, ctx: ${PI_CTX}, out: ${PI_OUT}, vision: ${LLAMA_VISION})"
+if [ "$WEB_SEARCH" = "1" ]; then
+    echo "[entrypoint] web search   -> duckduckgo (MCP: claude/opencode, CLI: websearch)"
+fi
 echo "[entrypoint] default agent: ${AGENT:-claude}"
 echo "[entrypoint] workspace: $(pwd)"
 

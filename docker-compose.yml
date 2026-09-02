@@ -77,6 +77,15 @@ services:
       # entrypoint で export しても `docker compose exec` には効かないのでここで渡す。
       # egress を絞っている構成では、届かない先への接続がタイムアウトまで待たされるだけなので切る。
       PI_OFFLINE: "1"
+      # ★Web 検索(DuckDuckGo)。0 で無効。
+      #   有効なら entrypoint が websearch を MCP サーバとして Claude Code / OpenCode に
+      #   登録し、firewall が duckduckgo のホストを自動でホワイトリストに足す。
+      WEB_SEARCH: ${WEB_SEARCH:-1}
+      # 既定の検索件数と DuckDuckGo の地域コード（wt-wt = 地域指定なし / jp-jp = 日本）。
+      # `docker compose exec` は entrypoint を通らないので、MCP サーバの子プロセスに
+      # 届けるにはここ（コンテナの env）に置く必要がある。
+      WEB_SEARCH_RESULTS: ${WEB_SEARCH_RESULTS:-5}
+      WEB_SEARCH_REGION: ${WEB_SEARCH_REGION:-wt-wt}
       # ★コンテナ（プロジェクト）ごとに違うホワイトリスト
       ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
       ENABLE_FIREWALL: ${ENABLE_FIREWALL:-1}

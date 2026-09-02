@@ -47,11 +47,21 @@ ARG GID=1000
 RUN if [ "$GID" != "1000" ]; then groupmod -g "$GID" node || true; fi \
     && if [ "$UID" != "1000" ]; then usermod -u "$UID" node || true; fi
 
+# --- Web 検索（DuckDuckGo）---
+# 組み込みの WebSearch は Anthropic の API サーバ側で動く server tool なので、
+# llama-server に向けた時点で使えない。代わりに DuckDuckGo を叩く小さなツールを置く。
+# 依存パッケージ無し（Node の global fetch のみ）なので npm からは何も取らない。
+# 拡張子付きのまま置いて、PATH には sh のラッパを通す（拡張子が無いと Node が
+# CommonJS として読もうとする可能性があるため）。
+COPY scripts/websearch.mjs /usr/local/lib/websearch.mjs
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/websearch.mjs "$@"\n' > /usr/local/bin/websearch \
+    && chmod +x /usr/local/bin/websearch /usr/local/lib/websearch.mjs
+
 # firewall スクリプトは root で実行する必要があるので sudo 経由を許可
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY scripts/entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
-    && { echo 'Defaults env_keep += "LLAMA_HOST LLAMA_PORT ALLOWED_DOMAINS"'; \
+    && { echo 'Defaults env_keep += "LLAMA_HOST LLAMA_PORT ALLOWED_DOMAINS WEB_SEARCH"'; \
          echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh'; } > /etc/sudoers.d/firewall \
     && chmod 0440 /etc/sudoers.d/firewall
 
