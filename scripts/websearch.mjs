@@ -395,6 +395,15 @@ function runMcpServer() {
     }
   };
 
+  // stdin が閉じたら終了する（MCP のシャットダウンはクライアントが stdin を閉じる）。
+  // ただし処理中のリクエストは返してから終わる。そうしないと
+  // `echo <request> | websearch --mcp` のような叩き方で黙って何も返らない。
+  let pending = 0;
+  let stdinClosed = false;
+  const exitWhenIdle = () => {
+    if (stdinClosed && pending === 0) process.exit(0);
+  };
+
   let buf = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
@@ -411,13 +420,22 @@ function runMcpServer() {
         fail(null, -32700, "parse error");
         continue;
       }
-      handle(msg).catch((e) => {
-        process.stderr.write(`[websearch] ${e.stack || e.message}\n`);
-        if (msg.id !== undefined && msg.id !== null) fail(msg.id, -32603, e.message);
-      });
+      pending++;
+      handle(msg)
+        .catch((e) => {
+          process.stderr.write(`[websearch] ${e.stack || e.message}\n`);
+          if (msg.id !== undefined && msg.id !== null) fail(msg.id, -32603, e.message);
+        })
+        .finally(() => {
+          pending--;
+          exitWhenIdle();
+        });
     }
   });
-  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("end", () => {
+    stdinClosed = true;
+    exitWhenIdle();
+  });
 }
 
 // ---------------------------------------------------------------- CLI
