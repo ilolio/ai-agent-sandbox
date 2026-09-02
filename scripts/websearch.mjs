@@ -53,6 +53,34 @@ const ENDPOINTS = [
 // safesearch は cookie の p で渡す（-2=off / -1=moderate / 1=strict）
 const SAFE_COOKIE = { off: "-2", moderate: "-1", strict: "1" };
 
+// Node の fetch はネットワーク層の失敗を全部 "fetch failed" に丸めてしまい、
+// 実際の理由（cause）が消える。このサンドボックスでは egress をホワイトリストで
+// 絞っている都合上、失敗のほとんどは「そのホストが ALLOWED_DOMAINS に無い」
+// ——iptables の DROP なので接続タイムアウトになる——なので、そこまで書いて返す。
+const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
+const UNREACHABLE_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ECONNREFUSED",
+]);
+
+function describeFetchError(e, host) {
+  if (e.name === "TimeoutError" || e.name === "AbortError") {
+    return `no response from ${host} within ${TIMEOUT_MS}ms`;
+  }
+  const code = e.cause?.code || e.cause?.name;
+  if (DNS_CODES.has(code)) return `cannot resolve ${host} (${code})`;
+  if (UNREACHABLE_CODES.has(code)) {
+    return (
+      `cannot connect to ${host} (${code}). This sandbox only allows the hosts ` +
+      `listed in ALLOWED_DOMAINS, so this address is probably blocked by the egress firewall`
+    );
+  }
+  return code ? `${e.message} (${code})` : e.message;
+}
+
 // ---------------------------------------------------------------- HTML 処理
 
 const ENTITIES = {
@@ -179,7 +207,7 @@ async function ddgSearch(query, opts = {}) {
       // 次のエンドポイントで通ることがあるので、まだ試していない口があれば回す。
       errors.push(`${endpoint}: no results parsed`);
     } catch (e) {
-      errors.push(`${endpoint}: ${e.name === "TimeoutError" ? "timeout" : e.message}`);
+      errors.push(`${endpoint}: ${describeFetchError(e, new URL(endpoint).host)}`);
     }
   }
   // 全部の口が「0 件」で揃ったときだけ「結果なし」として返す。
@@ -243,15 +271,20 @@ async function fetchPage(url, maxChars = MAX_CHARS) {
     throw new Error(`unsupported protocol: ${target.protocol}`);
   }
 
-  const res = await fetch(target, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
-      "Accept-Language": "ja,en-US;q=0.8,en;q=0.7",
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
+  let res;
+  try {
+    res = await fetch(target, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+        "Accept-Language": "ja,en-US;q=0.8,en;q=0.7",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error(describeFetchError(e, target.host));
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${target}`);
 
   const type = (res.headers.get("content-type") || "").toLowerCase();

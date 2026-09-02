@@ -271,6 +271,9 @@ WEB_SEARCH_REGION=wt-wt  # DuckDuckGo の地域コード。日本語の結果を
 - egress は `WEB_SEARCH=1` のとき duckduckgo のホストを自動で通す（`ALLOWED_DOMAINS` に
   書かなくてよい）。ただし **検索結果の URL を `web_fetch` / `WebFetch` で開けるのは
   `ALLOWED_DOMAINS` に入っているドメインだけ**。よく参照する先はホワイトリストに足すこと。
+  塞がれている先を開こうとしたときは、`cannot connect to <host> (UND_ERR_CONNECT_TIMEOUT).
+  This sandbox only allows the hosts listed in ALLOWED_DOMAINS ...` というエラーが返る
+  （iptables は REJECT ではなく DROP なので、ブロックは接続タイムアウトとして現れる）。
 - ホワイトリストは起動時の DNS 解決結果(IP)を固定する方式なので、DuckDuckGo 側の IP が
   変わると急に検索が通らなくなることがある。`./agent.sh <p> up` で作り直せば再解決される。
 - Claude Code の登録先 `~/.claude.json` は永続ボリュームの外（`~/.claude` とは別のファイル）。
