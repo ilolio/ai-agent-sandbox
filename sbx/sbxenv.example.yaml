@@ -1,0 +1,59 @@
+# プロジェクトごとにこのファイルをコピーして使う（env.example の sbx 版）。
+#
+#   cp sbx/sbxenv.example.yaml project-configs/myapp.sbxenv.yaml
+#   vi project-configs/myapp.sbxenv.yaml                # workspace と kits の args を編集
+#
+#   sbx env run project-configs/myapp.sbxenv.yaml                      # 既定エージェント
+#   sbx env run project-configs/myapp.sbxenv.yaml --env-arg agent=pi   # エージェントを切り替える
+#   sbx env plan project-configs/myapp.sbxenv.yaml                     # 何が起きるかだけ見る
+#   sbx env rm project-configs/myapp.sbxenv.yaml                       # 後始末
+#
+# kit のパスはこのファイルからの相対パスで解決される。sbx/ と project-configs/ の
+# どちらに置いても ../sbx/kits/ で届くようにしてある。
+schemaVersion: "1"
+
+# エージェントごとに別の sandbox になる（kit が違うので 1 つの sandbox を
+# 使い回せない）。名前にエージェントを入れておくと sbx ls で見分けやすい。
+name: myapp-${{ env.args.agent }}
+agent: ${{ env.args.agent }}-llamacpp
+
+# ★この 1 フォルダだけが sandbox から見える（読み書き可）。絶対パス推奨。
+workspace: /home/youruser/code/myapp
+
+args:
+  agent:
+    default: claude
+    enum: [claude, opencode, pi]
+    description: 使うエージェント（旧 env の AGENT）
+
+kits:
+  # エージェント本体と llama-server への配線。args は 3 エージェントで共通なので、
+  # --env-arg agent=... で切り替えてもここは書き換えなくてよい。
+  - source: ../sbx/kits/${{ env.args.agent }}-llamacpp
+    args:
+      # host の llama-server。host.docker.internal は sbx のプロキシが host の
+      # localhost に読み替える
+      llama_host: host.docker.internal
+      llama_port: "8080"
+      # llama-server が --api-key 付きのときだけ書き換える
+      api_key: llamacpp-local
+      model: local-model
+      # llama-server の --ctx-size に合わせる。ctx - out がプロンプト予算になる
+      ctx: "131072"
+      out: "32000"
+      # llama-server が VLM（--mmproj 付き）なら "1"、テキスト専用なら "0"
+      vision: "1"
+
+  # ★このプロジェクトで許可する egress 先（旧 ALLOWED_DOMAINS）。
+  # 完全遮断（llama-server だけ）にしたいならこの行を消す。
+  - ../sbx/kits/dev-registries
+
+  # 旧 FLAVOR の代わり。言語はイメージではなく、プロジェクトの .mise.toml で入れる。
+  # - docker.io/sbx/mise-kit:latest
+
+# sandboxOptions:
+#   memory: 8g
+
+# env:
+#   # OpenCode の 32k 出力上限を外す実験的フラグ（env.example 参照）
+#   OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: "131072"

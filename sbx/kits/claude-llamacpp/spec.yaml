@@ -1,0 +1,135 @@
+# Claude Code を host の llama-server（Anthropic 互換の口）に向ける sandbox kit。
+#
+# 組み込みの claude を extends で継承するので、イメージ・trust/bypass フラグの
+# 初期化・セッション履歴のボリュームなどはそちらのものをそのまま使う。
+# ここで足すのは scripts/entrypoint.sh の「Claude Code 側の設定」に相当する部分だけ。
+#
+#   sbx run --kit ./sbx/kits/claude-llamacpp claude-llamacpp ~/code/myapp
+#   （普段は sbx/sbxenv.example.yaml 経由で使う）
+schemaVersion: "2"
+kind: sandbox
+name: claude-llamacpp
+displayName: Claude Code (llama-server)
+description: >-
+  組み込みの claude を host の llama-server に向けたもの。モデルが 1 個しか居ない
+  前提で、エイリアス解決・context 上限・thinking オフ・KV キャッシュ対策・
+  長いタイムアウトを入れる。
+extends: claude
+
+# 3 つの llamacpp kit は同じ引数を受け付ける（sbxenv.yaml でエージェントを
+# 切り替えても kits[].args を書き換えずに済むように）。
+args:
+  llama_host:
+    default: host.docker.internal
+    description: >-
+      llama-server のホスト。host.docker.internal は sbx のプロキシが host の
+      localhost に読み替えるので、llama-server は 127.0.0.1 で待ち受けていてよい。
+    pattern: '^[A-Za-z0-9.-]+$'
+  llama_port:
+    default: "8080"
+    description: llama-server のポート
+    pattern: '^[0-9]{1,5}$'
+  api_key:
+    default: llamacpp-local
+    description: >-
+      llama-server の --api-key。認証なしのサーバならダミーのままでよい
+      （空だと CLI が認証未設定とみなすのでダミーを入れている）。
+    pattern: '^[A-Za-z0-9._~+/=-]+$'
+  model:
+    default: local-model
+    description: llama-server に要求するモデル名
+    pattern: '^[A-Za-z0-9._:/@+-]+$'
+  ctx:
+    default: "131072"
+    description: llama-server の --ctx-size に合わせる
+    pattern: '^[0-9]+$'
+  out:
+    default: "32000"
+    description: 毎リクエストの max_tokens。ctx - out がプロンプト予算（自動 compact の閾値）になる
+    pattern: '^[0-9]+$'
+  vision:
+    default: "1"
+    description: Claude Code では使わない（画像はそのままリクエストに載る）。引数を揃えるために宣言だけしている
+    enum: ["0", "1"]
+
+permissions:
+  network:
+    allow:
+      - "${{ kit.args.llama_host }}:${{ kit.args.llama_port }}"
+    # 継承元の claude は Anthropic の API / ログイン系を許可している。
+    # deny は allow より強いので、ここで塞いでおけばクラウドには出ていかない。
+    deny:
+      - api.anthropic.com
+      - console.anthropic.com
+      - mcp-proxy.anthropic.com
+      - platform.claude.com
+      - claude.ai
+      - bridge.claudeusercontent.com
+
+# 中身は scripts/entrypoint.sh が settings.json の env に書いていたものと同じ。
+# Claude Code はこれらをプロセスの環境変数から読むので、settings.json を
+# いじらずに環境変数として渡すだけで足りる。
+environment:
+  variables:
+    ANTHROPIC_BASE_URL: "http://${{ kit.args.llama_host }}:${{ kit.args.llama_port }}"
+    ANTHROPIC_AUTH_TOKEN: "${{ kit.args.api_key }}"
+
+    # --- モデル解決: 全エイリアスをローカルモデルに寄せる ---
+    ANTHROPIC_MODEL: "${{ kit.args.model }}"
+    # HAIKU は「バックグラウンド処理」（会話要約など）にも使われるので必須
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "${{ kit.args.model }}"
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "${{ kit.args.model }}"
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "${{ kit.args.model }}"
+    ANTHROPIC_DEFAULT_FABLE_MODEL: "${{ kit.args.model }}"
+    CLAUDE_CODE_SUBAGENT_MODEL: "${{ kit.args.model }}"
+    ANTHROPIC_CUSTOM_MODEL_OPTION: "${{ kit.args.model }}"
+    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: llama-server (local)
+
+    # --- context / 出力トークン ---
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: "${{ kit.args.ctx }}"
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "${{ kit.args.out }}"
+
+    # --- llama-server が解さない機能を切る ---
+    # 継承元の settings.json は alwaysThinkingEnabled: true だが、これで送らなくなる
+    MAX_THINKING_TOKENS: "0"
+    DISABLE_INTERLEAVED_THINKING: "1"
+
+    # --- llama-server の prefix キャッシュを効かせる ---
+    # 会話ごとに変わる billing ヘッダが system プロンプト先頭に入るのを止める
+    CLAUDE_CODE_ATTRIBUTION_HEADER: "0"
+
+    # --- ローカル推論は遅いのでタイムアウトを伸ばす ---
+    API_TIMEOUT_MS: "1800000"
+    CLAUDE_CODE_STREAM_IDLE_TIMEOUT_MS: "1800000"
+    API_FORCE_IDLE_TIMEOUT: "0"
+
+    # --- オフライン前提 ---
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    DISABLE_AUTOUPDATER: "1"
+    DISABLE_TELEMETRY: "1"
+    DISABLE_ERROR_REPORTING: "1"
+    DISABLE_COST_WARNINGS: "1"
+
+setup:
+  install:
+    # sbx の claude は --dangerously-skip-permissions で起動する（承認プロンプトなし）。
+    # それでも deny ルールは効くので、旧構成の「履歴を壊す git 操作だけは常にブロック」を
+    # managed settings に置く。~/.claude/settings.json は継承元が毎回書き直すので、
+    # 別ファイルにしておけば衝突しない。
+    - command: |
+        set -e
+        mkdir -p /etc/claude-code
+        cat > /etc/claude-code/managed-settings.json <<'EOF'
+        {
+          "permissions": {
+            "deny": [
+              "Bash(git push --force:*)",
+              "Bash(git push -f:*)",
+              "Bash(git reset --hard:*)"
+            ]
+          }
+        }
+        EOF
+        chmod 0644 /etc/claude-code/managed-settings.json
+      user: "0"
+      description: git の破壊的操作を deny する managed settings を置く

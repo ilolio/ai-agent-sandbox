@@ -6,6 +6,9 @@ Docker コンテナに コーディングエージェント CLI (llama.cpp バ�
 
 エージェントは **Claude Code** / **OpenCode** / **pi** の 3 つがイメージに入っていて、起動時に選ぶ。
 
+> 同じことを [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)（microVM + プロキシ方式の egress 制御）の上でやる
+> kit と移行ガイドを [`sbx/`](sbx/README.md) に置いている。
+
 ## 前提
 
 - host 側で llama-server が起動していること（Anthropic Messages API 対応版 = 2026/01 以降）

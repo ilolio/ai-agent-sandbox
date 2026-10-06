@@ -1,0 +1,107 @@
+# OpenCode を host の llama-server（OpenAI 互換の /v1）に向ける sandbox kit。
+#
+# 組み込みの opencode を extends で継承する。scripts/entrypoint.sh の
+# 「OpenCode 側の設定」に相当する opencode.json を作って OPENCODE_CONFIG で読ませる。
+#
+#   sbx run --kit ./sbx/kits/opencode-llamacpp opencode-llamacpp ~/code/myapp
+#   （普段は sbx/sbxenv.example.yaml 経由で使う）
+schemaVersion: "2"
+kind: sandbox
+name: opencode-llamacpp
+displayName: OpenCode (llama-server)
+description: >-
+  組み込みの opencode に、host の llama-server を llamacpp プロバイダとして
+  登録したもの。context / output 上限と画像入力の有無もここで宣言する。
+extends: opencode
+
+# 引数は 3 つの llamacpp kit で共通。説明は claude-llamacpp/spec.yaml を参照。
+args:
+  llama_host:
+    default: host.docker.internal
+    pattern: '^[A-Za-z0-9.-]+$'
+  llama_port:
+    default: "8080"
+    pattern: '^[0-9]{1,5}$'
+  api_key:
+    default: llamacpp-local
+    pattern: '^[A-Za-z0-9._~+/=-]+$'
+  model:
+    default: local-model
+    pattern: '^[A-Za-z0-9._:/@+-]+$'
+  ctx:
+    default: "131072"
+    pattern: '^[0-9]+$'
+  out:
+    default: "32000"
+    description: OpenCode は内部で 32000 に頭打ちにする（OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX で外せる）
+    pattern: '^[0-9]+$'
+  vision:
+    default: "1"
+    description: llama-server が VLM（--mmproj 付き）なら 1。0 だと OpenCode は画像を送らない
+    enum: ["0", "1"]
+
+permissions:
+  network:
+    allow:
+      - "${{ kit.args.llama_host }}:${{ kit.args.llama_port }}"
+
+environment:
+  variables:
+    # 継承元の opencode は MCP gateway を使うとき ~/.config/opencode/opencode.json を
+    # 丸ごと書き直す。それとぶつからないよう、こちらの設定は別ファイルに置いて
+    # OPENCODE_CONFIG で読ませる（OpenCode はグローバル設定とマージする）。
+    OPENCODE_CONFIG: /home/agent/.config/llamacpp/opencode.json
+
+setup:
+  install:
+    # 中身は scripts/entrypoint.sh が生成していた opencode.json と同じ。
+    # プロバイダ id を llamacpp にするのは、llama だと models.dev の Meta Llama API と
+    # マージされて使えないモデルが候補に混ざるため。
+    - command: |
+        set -e
+        if [ "${{ kit.args.vision }}" = "1" ]; then
+          attachment=true
+          input='["text", "image"]'
+        else
+          attachment=false
+          input='["text"]'
+        fi
+        mkdir -p /home/agent/.config/llamacpp
+        cat > /home/agent/.config/llamacpp/opencode.json <<EOF
+        {
+          "\$schema": "https://opencode.ai/config.json",
+          "autoupdate": false,
+          "provider": {
+            "llamacpp": {
+              "npm": "@ai-sdk/openai-compatible",
+              "name": "llama-server (local)",
+              "options": {
+                "baseURL": "http://${{ kit.args.llama_host }}:${{ kit.args.llama_port }}/v1",
+                "apiKey": "${{ kit.args.api_key }}"
+              },
+              "models": {
+                "${{ kit.args.model }}": {
+                  "name": "${{ kit.args.model }}",
+                  "limit": { "context": ${{ kit.args.ctx }}, "output": ${{ kit.args.out }} },
+                  "attachment": $attachment,
+                  "modalities": { "input": $input, "output": ["text"] }
+                }
+              }
+            }
+          },
+          "model": "llamacpp/${{ kit.args.model }}",
+          "permission": {
+            "*": "ask",
+            "read": "allow",
+            "edit": "allow",
+            "bash": {
+              "*": "ask",
+              "git push --force*": "deny",
+              "git push -f*": "deny",
+              "git reset --hard*": "deny"
+            }
+          }
+        }
+        EOF
+      user: "1000"
+      description: llamacpp プロバイダを登録した opencode.json を書く

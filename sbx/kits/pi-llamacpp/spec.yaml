@@ -1,0 +1,120 @@
+# pi を host の llama-server（OpenAI 互換の /v1）に向ける sandbox kit。
+#
+# pi は sbx の組み込みエージェントではないので extends できない。代わりに
+# sbx-kits-contrib の pi kit と同じ pi 入りイメージを直接使う。contrib の pi kit が
+# 宣言している Anthropic の認証情報はこちらでは持たないので、
+# 起動時に Anthropic のキーを聞かれることもない。
+#
+#   sbx run --kit ./sbx/kits/pi-llamacpp pi-llamacpp ~/code/myapp
+#   （普段は sbx/sbxenv.example.yaml 経由で使う）
+schemaVersion: "2"
+kind: sandbox
+name: pi-llamacpp
+displayName: pi (llama-server)
+description: >-
+  pi に host の llama-server を llamacpp プロバイダとして登録したもの。
+  クラウドの LLM には一切つながない。
+sandbox:
+  # https://github.com/docker/sbx-kits-contrib/tree/main/pi
+  image: docker.io/sbx/pi-image:latest
+  entrypoint: [pi]
+
+# 引数は 3 つの llamacpp kit で共通。説明は claude-llamacpp/spec.yaml を参照。
+args:
+  llama_host:
+    default: host.docker.internal
+    pattern: '^[A-Za-z0-9.-]+$'
+  llama_port:
+    default: "8080"
+    pattern: '^[0-9]{1,5}$'
+  api_key:
+    default: llamacpp-local
+    description: pi は認証の無いモデルを /model の候補から外すので空にはできない
+    pattern: '^[A-Za-z0-9._~+/=-]+$'
+  model:
+    default: local-model
+    pattern: '^[A-Za-z0-9._:/@+-]+$'
+  ctx:
+    default: "131072"
+    pattern: '^[0-9]+$'
+  out:
+    default: "32000"
+    description: max_tokens 兼 compaction.reserveTokens
+    pattern: '^[0-9]+$'
+  vision:
+    default: "1"
+    description: llama-server が VLM（--mmproj 付き）なら 1。0 だと read が画像を捨てる
+    enum: ["0", "1"]
+
+agentInstructions:
+  filename: AGENTS.md
+
+permissions:
+  network:
+    # pi 自体はこれ以外どこにも出ない（PI_OFFLINE=1）。`pi install npm:...` を使うなら
+    # registry.npmjs.org を許可する（dev-registries kit に入っている）。
+    allow:
+      - "${{ kit.args.llama_host }}:${{ kit.args.llama_port }}"
+
+environment:
+  variables:
+    # 起動時のバージョン確認・パッケージ更新確認・telemetry を止める
+    PI_OFFLINE: "1"
+
+setup:
+  install:
+    # contrib の pi kit と同じ。`pi install` が sbx のプロキシ経由で npm を叩けるようにする
+    - command: 'if [ -n "${HTTP_PROXY:-}" ]; then npm config set proxy="$HTTP_PROXY" https-proxy="${HTTPS_PROXY:-$HTTP_PROXY}"; fi'
+      user: "1000"
+      description: npm を sandbox のプロキシに向ける
+    # 中身は scripts/entrypoint.sh が生成していた models.json / settings.json と同じ。
+    # sandbox を作るたびに書き直す（作り直すと pi の /settings で変えた内容は消える）。
+    - command: |
+        set -e
+        if [ "${{ kit.args.vision }}" = "1" ]; then
+          input='["text", "image"]'
+        else
+          input='["text"]'
+        fi
+        mkdir -p /home/agent/.pi/agent
+        cat > /home/agent/.pi/agent/models.json <<EOF
+        {
+          "providers": {
+            "llamacpp": {
+              "baseUrl": "http://${{ kit.args.llama_host }}:${{ kit.args.llama_port }}/v1",
+              "api": "openai-completions",
+              "apiKey": "${{ kit.args.api_key }}",
+              "compat": {
+                "supportsDeveloperRole": false,
+                "supportsReasoningEffort": false,
+                "supportsStore": false,
+                "maxTokensField": "max_tokens"
+              },
+              "models": [
+                {
+                  "id": "${{ kit.args.model }}",
+                  "name": "llama-server (local)",
+                  "reasoning": false,
+                  "input": $input,
+                  "contextWindow": ${{ kit.args.ctx }},
+                  "maxTokens": ${{ kit.args.out }},
+                  "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                }
+              ]
+            }
+          }
+        }
+        EOF
+        cat > /home/agent/.pi/agent/settings.json <<EOF
+        {
+          "defaultProvider": "llamacpp",
+          "defaultModel": "${{ kit.args.model }}",
+          "defaultThinkingLevel": "off",
+          "enableInstallTelemetry": false,
+          "httpIdleTimeoutMs": 1800000,
+          "compaction": { "reserveTokens": ${{ kit.args.out }} },
+          "retry": { "provider": { "timeoutMs": 1800000 } }
+        }
+        EOF
+      user: "1000"
+      description: llamacpp プロバイダを登録した models.json と settings.json を書く

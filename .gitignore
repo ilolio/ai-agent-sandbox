@@ -1,6 +1,7 @@
 # プロジェクト個別設定（WORKSPACE パスや egress 設定を含むのでコミットしない）
 # env.example はテンプレートなので追跡する
 project-configs/*.env
+project-configs/*.sbxenv.yaml
 
 # ローカル開発用のファイル
 *.local

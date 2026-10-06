@@ -1,0 +1,28 @@
+# 言語のパッケージ取得に使う汎用ドメインをまとめて許可する mixin。
+# env.example の ALLOWED_DOMAINS の既定値に相当する。どのエージェントにも重ねられる。
+#
+# 要らない行は消してよい。プロジェクト固有のドメインを足したいときは、
+# この kit をコピーして別名の mixin を作り、sbxenv.yaml の kits に並べる。
+schemaVersion: "2"
+kind: mixin
+name: dev-registries
+displayName: Package registries
+description: npm / PyPI・uv / Go modules / GitHub への egress を許可する
+
+permissions:
+  network:
+    allow:
+      # npm（OpenCode のプロバイダ SDK、`pi install npm:...` もここ）
+      - registry.npmjs.org
+      # pip / uv
+      - pypi.org
+      - files.pythonhosted.org
+      - astral.sh
+      # go mod
+      - proxy.golang.org
+      - sum.golang.org
+      # GitHub。リリースアセットは *.githubusercontent.com の別ホストに
+      # リダイレクトされるので、そこはワイルドカードにしておく
+      - github.com
+      - codeload.github.com
+      - "**.githubusercontent.com"
