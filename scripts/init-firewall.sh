@@ -49,6 +49,8 @@ if [ -n "${GW:-}" ]; then
 fi
 
 # --- ホワイトリストドメインを ipset でまとめる ---
+# Web 検索(DuckDuckGo)の口もここに書いてもらう（暗黙に開けない）。
+# 書き忘れは entrypoint が起動時に警告する。
 ipset create allowed hash:ip -exist
 if [ -n "$ALLOWED_DOMAINS" ]; then
     IFS=',' read -ra DOMS <<< "$ALLOWED_DOMAINS"

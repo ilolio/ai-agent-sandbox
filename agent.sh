@@ -91,6 +91,9 @@ warn_env_drift() {
     PI_MODEL= \
     PI_CTX=131072 \
     PI_OUT=32000 \
+    WEB_SEARCH=1 \
+    WEB_SEARCH_RESULTS=5 \
+    WEB_SEARCH_REGION=wt-wt \
     ALLOWED_DOMAINS= \
     ENABLE_FIREWALL=1
   do
